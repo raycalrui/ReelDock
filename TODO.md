@@ -74,7 +74,7 @@ Done when: tags set in ReelDock appear in Finder and tags set in Finder appear i
 
 ## Distribution (In progress)
 
-- [x] Check for and install updates with Sparkle
+- [x] Check for and install updates with Sparkle (scripted from 0.0.9 to the published 0.1.0 through the real feed, the update dialog not exercised)
 - [x] Developer ID signing, notarization, and a DMG
 
 ## Candidates (not selected)

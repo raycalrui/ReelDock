@@ -180,6 +180,8 @@ final class DebugDriver {
         #if UPDATER_TEST
         case "updatecheck":
             return UpdateController.shared.debugCheckInBackground()
+        case "quit":
+            NSApp.terminate(nil)
         #endif
         case "stallstart":
             debugStallWatch.start()
