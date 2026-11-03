@@ -58,10 +58,14 @@ Finder makes this slow in two ways:
 
 ## Building
 
-Open `ReelDock.xcodeproj` in Xcode and press ⌘R. On first launch, choose the folder that contains your projects.
+Open `ReelDock.xcodeproj` in Xcode, choose your own team under Signing & Capabilities, and press ⌘R. On first launch, choose the folder that contains your projects.
 
 To run the tests from the command line:
 
 ```bash
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project ReelDock.xcodeproj -scheme ReelDock test
 ```
+
+## License
+
+[MIT](LICENSE)
