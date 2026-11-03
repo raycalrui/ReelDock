@@ -67,9 +67,16 @@ struct ImportPanelView: View {
             Button {
                 app.eject(card, from: controller)
             } label: {
-                Label("Eject", systemImage: "eject.fill")
+                if app.ejectingCardIDs.contains(card.id) {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Ejecting…")
+                    }
+                } else {
+                    Label("Eject", systemImage: "eject.fill")
+                }
             }
-            .disabled(app.queue.isActive(cardID: card.id))
+            .disabled(app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -284,7 +291,7 @@ struct ImportPanelView: View {
                     start(selected, card: card, target: .archive)
                 }
                 .fixedSize()
-                .disabled(selected.isEmpty)
+                .disabled(selected.isEmpty || app.ejectingCardIDs.contains(card.id))
                 targetButton(selected: selected, card: card)
             }
         }
@@ -330,7 +337,7 @@ struct ImportPanelView: View {
             .fixedSize()
             .help("Import somewhere else")
         }
-        .disabled(selected.isEmpty)
+        .disabled(selected.isEmpty || app.ejectingCardIDs.contains(card.id))
     }
 
     private func subfolderTitle(_ url: URL) -> String {
@@ -588,7 +595,10 @@ struct ImportActivityView: View {
             }
             Spacer()
             ForEach(ejectableCards) { card in
-                Button("Eject \(card.volumeName)") { app.eject(card, from: nil) }
+                Button(app.ejectingCardIDs.contains(card.id) ? "Ejecting \(card.volumeName)…" : "Eject \(card.volumeName)") {
+                    app.eject(card, from: nil)
+                }
+                .disabled(app.ejectingCardIDs.contains(card.id))
             }
         }
     }

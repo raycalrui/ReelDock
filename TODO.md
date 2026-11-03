@@ -50,7 +50,7 @@ Unit tests cover parsing, grouping, statuses, routing, and the copier. "Scripted
 - [x] Copy engine with verification, safe naming, and failure handling (scripted)
 - [x] Background queue with progress, pause, and cancel (scripted, progress popover not exercised)
 - [x] Personal archive routing by shooting month, created from the template (scripted on a temporary archive)
-- [x] Eject after import (scripted on a simulated card, refused while copying)
+- [x] Eject after import without blocking the app, with a spinner and sounds (scripted on a simulated card, refused while copying, accepted on a real card)
 - [ ] Hands-on import from a real card into a real project and the real archive
 - [ ] Timed comparison with Finder on a real card with multi-GB clips
 

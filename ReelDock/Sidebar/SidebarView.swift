@@ -111,7 +111,7 @@ struct SidebarView: View {
                         .foregroundStyle(isOpen ? Color.accentColor : Color.secondary)
                 }
                 Spacer()
-                if app.queue.isActive(cardID: card.id) {
+                if app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id) {
                     ProgressView().controlSize(.mini)
                 } else if newClips > 0 {
                     Text("\(newClips) new")
@@ -126,7 +126,7 @@ struct SidebarView: View {
         .contextMenu {
             Button("Import…") { controller?.showImportPanel(cardID: card.id) }
             Button("Eject") { app.eject(card, from: controller) }
-                .disabled(app.queue.isActive(cardID: card.id))
+                .disabled(app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id))
         }
     }
 

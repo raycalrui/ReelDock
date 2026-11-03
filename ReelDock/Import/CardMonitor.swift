@@ -100,3 +100,24 @@ final class CardMonitor {
         return card.clips.filter { presence[$0.id]?.isNew ?? true }.count
     }
 }
+
+/// System sounds, so nothing extra ships with the app.
+enum CardSound: String {
+    case inserted = "Pop"
+    case ejected = "Glass"
+
+    func play() {
+        let sound = NSSound(named: rawValue)
+        // A named sound is shared, and can't start again while it's still playing.
+        sound?.stop()
+        sound?.play()
+        #if DEBUG
+        debugPlayedSounds.append("\(rawValue)=\(sound?.isPlaying ?? false)")
+        #endif
+    }
+}
+
+#if DEBUG
+var debugPlayedSounds: [String] = []
+var debugLastEjectDuration: Duration?
+#endif

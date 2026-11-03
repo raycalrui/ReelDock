@@ -143,6 +143,7 @@ Existing tags already used this way: `Green`, `Orange`, and `Blue` on project fo
 ### Detection
 
 - React to volume mount and unmount notifications.
+- Play a short sound when a card is inserted, but not for a card already in when the app launches.
 - A volume is a Sony card if `PRIVATE/M4ROOT/CLIP` exists on it. Do not filter on "external": the built-in SD slot reports `removable=true` and `internal=true`.
 - Device handling lives behind an adapter, so other cameras can be added without changing the main flow. v1 ships only the Sony adapter.
 
@@ -235,6 +236,8 @@ Clips are copied one at a time because parallel reads from one card add seeking 
 **Background work:** copying continues while using any tab. A toolbar item shows progress, speed, and time remaining, with pause and cancel.
 
 **When finished:** show a summary with an **Eject** button. Never eject automatically, and refuse to eject while a copy from that card is running.
+
+**Ejecting:** the app stays usable while a card ejects. The button and the sidebar row show a spinner, and importing from that card is unavailable. A sound plays once the card is safe to remove. If the card stays busy, an alert explains why and no sound plays.
 
 **Failures:**
 

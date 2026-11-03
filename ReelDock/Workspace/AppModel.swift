@@ -35,6 +35,9 @@ final class AppModel {
     @ObservationIgnored private var rootWatcher: FolderWatcher?
     @ObservationIgnored private var saveWork: DispatchWorkItem?
     @ObservationIgnored private var knownCardIDs: Set<String> = []
+    @ObservationIgnored private var hasReadCards = false
+    /// Cards on their way out. A card stays here until it leaves the list, so nothing can start on it meanwhile.
+    private(set) var ejectingCardIDs: Set<String> = []
     @ObservationIgnored private(set) var controllers: [WorkspaceWindowController] = []
 
     init(store: SettingsStore = SettingsStore(directory: SettingsStore.standardDirectory)) {
@@ -151,7 +154,11 @@ final class AppModel {
     private func cardsDidChange(_ cards: [CameraCard]) {
         let inserted = cards.first { !knownCardIDs.contains($0.id) }
         knownCardIDs = Set(cards.map(\.id))
+        ejectingCardIDs.formIntersection(knownCardIDs)
         controllers.forEach { $0.cardsDidChange() }
+        // A card that was already in when the app launched wasn't just inserted, so it stays quiet.
+        if inserted != nil, hasReadCards { CardSound.inserted.play() }
+        hasReadCards = true
         guard let inserted else { return }
         let target = frontController ?? addWindow()
         if !target.tab.isImportPanelVisible {
@@ -263,25 +270,39 @@ final class AppModel {
         return name
     }
 
+    /// Ejecting can take many seconds while a card flushes, so it never runs on the main thread.
     func eject(_ card: CameraCard, from controller: WorkspaceWindowController?) {
-        guard !queue.isActive(cardID: card.id) else { return }
+        guard !queue.isActive(cardID: card.id), ejectingCardIDs.insert(card.id).inserted else { return }
         // An open clip would keep the volume busy.
         controllers.forEach { $0.tab.playback.release(under: card.volumeURL) }
-        attemptEject(card, from: controller, retriesLeft: 5)
-    }
-
-    /// The player closes its file a moment after being released, so the first attempt can find the card still busy.
-    private func attemptEject(_ card: CameraCard, from controller: WorkspaceWindowController?, retriesLeft: Int) {
-        do {
-            try NSWorkspace.shared.unmountAndEjectDevice(at: card.volumeURL)
-        } catch {
-            guard retriesLeft > 0 else {
-                showAlert("Can't eject \(card.volumeName)", error.localizedDescription, controller)
-                return
+        Task { [weak self, weak controller] in
+            #if DEBUG
+            let start = ContinuousClock.now
+            #endif
+            var failure: (any Error)?
+            // The player closes its file a moment after being released, so the first attempts can find the card still busy.
+            for attempt in 0...5 {
+                if attempt > 0 { try? await Task.sleep(for: .milliseconds(400)) }
+                do {
+                    try await FileManager.default.unmountVolume(at: card.volumeURL, options: [.allPartitionsAndEjectDisk, .withoutUI])
+                    failure = nil
+                    break
+                } catch {
+                    failure = error
+                }
             }
-            Task { [weak self, weak controller] in
-                try? await Task.sleep(for: .milliseconds(400))
-                self?.attemptEject(card, from: controller, retriesLeft: retriesLeft - 1)
+            #if DEBUG
+            debugLastEjectDuration = ContinuousClock.now - start
+            #endif
+            guard let self else { return }
+            if let failure {
+                ejectingCardIDs.remove(card.id)
+                // Pulling the card out mid-eject also lands here, and needs no explaining.
+                guard FileManager.default.fileExists(atPath: card.volumeURL.path) else { return }
+                showAlert("Can't eject \(card.volumeName)", failure.localizedDescription, controller)
+            } else {
+                CardSound.ejected.play()
+                self.cards.rescanVolumes()
             }
         }
     }

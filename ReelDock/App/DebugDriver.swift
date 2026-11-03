@@ -175,6 +175,12 @@ final class DebugDriver {
         case "eject":
             guard let card = app.cards.cards.first(where: { $0.volumeName == parts[1] }) else { return "no card" }
             app.eject(card, from: controller)
+        case "ejectstate":
+            return "ejecting=\(app.ejectingCardIDs.count) cards=\(app.cards.cards.map(\.volumeName)) sounds=\(debugPlayedSounds) duration=\(debugLastEjectDuration.map { "\($0)" } ?? "nil")"
+        case "stallstart":
+            debugStallWatch.start()
+        case "stallreport":
+            return debugStallWatch.report()
         case "snapimport":
             guard let host = content.debugImportHost, let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { return "no panel" }
             host.cacheDisplay(in: host.bounds, to: rep)
@@ -531,6 +537,38 @@ private extension NSView {
             if let table = view.debugFirstTable { return table }
         }
         return nil
+    }
+}
+
+/// Measures the longest time the main thread went without running a timer.
+let debugStallWatch = DebugStallWatch()
+
+final class DebugStallWatch {
+    private var timer: Timer?
+    private var last = ContinuousClock.now
+    private var longest = Duration.zero
+
+    func start() {
+        timer?.invalidate()
+        last = .now
+        longest = .zero
+        let timer = Timer(timeInterval: 0.005, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func tick() {
+        let now = ContinuousClock.now
+        longest = max(longest, now - last)
+        last = now
+    }
+
+    func report() -> String {
+        timer?.invalidate()
+        timer = nil
+        return "longestMainThreadGap=\(longest)"
     }
 }
 #endif
