@@ -1,0 +1,20 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>ReelDock</title>
+        <item>
+            <title>0.1.0</title>
+            <pubDate>Wed, 04 Nov 2026 00:23:39 +0800</pubDate>
+            <link>https://github.com/raycalrui/ReelDock/releases/tag/v0.1.0</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/raycalrui/ReelDock/releases/tag/v0.1.0</sparkle:fullReleaseNotesLink>
+            <sparkle:version>1</sparkle:version>
+            <sparkle:shortVersionString>0.1.0</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/raycalrui/ReelDock/releases/download/v0.1.0/ReelDock-0.1.0.dmg" length="4434629" type="application/octet-stream" sparkle:edSignature="Oviw57hRJd/JLmc2i/ua6iH8wFAJkSeiHhqGPxLZzppmhyTrIchv1ufQ0IpH5DHxuPVHFFi+kKzY4RSB1Zg6DA=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: raDYGCuLL00Z/9LoPhLznlmAoM5n1IOFjrF/e5W4u7BOsQOJTzN6JZ7eLg3gWBVUAL30R/0SVXEyH/+V1ULNBg==
+length: 1256
+-->
