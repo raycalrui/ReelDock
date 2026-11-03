@@ -118,6 +118,10 @@ Finder's row of color dots is `NSMenu.palette`, which a SwiftUI context menu can
 
 A faint background in the tag's color was tried on project rows and rejected after use, since it made the list look heavy. Dots at the far edge sat too far from the name, so they go in front of it. `NSWindowTab.accessoryView` always sits at the tab's far edge, so tabs put the dots in `attributedTitle` instead. They are an image there because the tab recolors its title's text, which turns a colored glyph gray.
 
+## The app icon is an Icon Composer document
+
+`ReelDock/AppIcon.icon` holds layered SVGs, so the system renders the glass and handles the default, dark, and clear appearances itself. A flat image can't refract or blur what's behind it. Edit it in Icon Composer, which ships inside Xcode.
+
 ## A card opens its panel when it appears
 
 The panel exists only while a card is present, so it opens on insertion and closes when the last card leaves. Only a newly seen card opens it, including one already inserted when the app launches, so closing the panel stays closed until a card is inserted again. It opens in the front window only.
