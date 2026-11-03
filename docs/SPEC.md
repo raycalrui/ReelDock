@@ -276,3 +276,9 @@ The ledger is append-only plain text, so it can be inspected and backed up easil
 
 - macOS will ask for access to the Desktop folder and to removable volumes, because projects live under `~/Desktop/video`.
 - Builds need a stable code signature, or macOS asks again after each rebuild. A valid signing identity already exists on this Mac.
+
+## 11. Updates
+
+- Sparkle checks for updates once a day, and **Check for Updates…** in the app menu checks right away. Nothing installs without asking.
+- Releases are Developer ID signed and notarized DMGs on GitHub. `appcast.xml` on `main` lists them, and both are checked against an EdDSA key.
+- Debug builds never start the updater.

@@ -51,6 +51,10 @@ Finder makes this slow in two ways:
 - Deleting clips from cards. Format cards in the camera.
 - Applying LUTs to previews, generating proxies, or integrating with DaVinci Resolve beyond dragging files into it.
 
+## Install
+
+Download the DMG from [Releases](https://github.com/raycalrui/ReelDock/releases), and drag ReelDock to Applications. Builds are signed with a Developer ID and notarized by Apple. ReelDock checks for updates once a day, and **ReelDock > Check for Updates…** checks right away. An update always asks before installing.
+
 ## Requirements
 
 - macOS 26 or later
@@ -68,4 +72,4 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Ree
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Updates use [Sparkle](https://sparkle-project.org), which has its own [license](https://github.com/sparkle-project/Sparkle/blob/2.x/LICENSE).

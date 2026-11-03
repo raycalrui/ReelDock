@@ -122,6 +122,10 @@ A faint background in the tag's color was tried on project rows and rejected aft
 
 `ReelDock/AppIcon.icon` holds layered SVGs, so the system renders the glass and handles the default, dark, and clear appearances itself. A flat image can't refract or blur what's behind it. Edit it in Icon Composer, which ships inside Xcode.
 
+## Updates use Sparkle
+
+Replacing a running app safely, and checking that a download really came from us, is easy to get subtly wrong, so this is the one third-party dependency, as in Raycal's other apps. Both the appcast and the DMG are checked against an EdDSA key. A Debug build has the release's bundle ID, so it never starts the updater, or a download could replace the build Xcode is running.
+
 ## A card opens its panel when it appears
 
 The panel exists only while a card is present, so it opens on insertion and closes when the last card leaves. Only a newly seen card opens it, including one already inserted when the app launches, so closing the panel stays closed until a card is inserted again. It opens in the front window only.

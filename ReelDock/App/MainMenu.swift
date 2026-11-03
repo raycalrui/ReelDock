@@ -35,6 +35,7 @@ enum MainMenu {
     private static func appItems() -> [NSMenuItem] {
         [
             item("About ReelDock", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            UpdateController.shared.menuItem(),
             .separator(),
             item("Choose Projects Folder…", #selector(WorkspaceWindowController.chooseProjectRoot(_:))),
             item("Choose Personal Archive Folder…", #selector(WorkspaceWindowController.chooseMediaRoot(_:))),

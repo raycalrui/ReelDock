@@ -72,6 +72,11 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 
 Done when: tags set in ReelDock appear in Finder and tags set in Finder appear in ReelDock, tested on temporary fixtures.
 
+## Distribution (In progress)
+
+- [x] Check for and install updates with Sparkle
+- [x] Developer ID signing, notarization, and a DMG
+
 ## Candidates (not selected)
 
 - DJI Action video import

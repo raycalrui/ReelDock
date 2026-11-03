@@ -18,7 +18,7 @@ These rules apply to agents working in this repository unless the user explicitl
 
 - Swift with an AppKit app shell and native window tabs. SwiftUI is fine for the sidebar, panels, and settings.
 - Column browsers use view-based `NSTableView` columns, not `NSBrowser` (see `DECISIONS.md`).
-- No third-party dependencies unless Raycal agrees.
+- No third-party dependencies unless Raycal agrees. Sparkle is the one exception, for signed updates.
 - Not sandboxed, not targeting the Mac App Store.
 - `xcode-select` on this Mac points at the Command Line Tools, so `xcodebuild` needs the developer directory set:
 
@@ -60,3 +60,9 @@ Client and project names, footage, and device serial numbers stay out of the rep
 
 - Stage only paths related to the task and review the staged diff before committing.
 - Commit or push only when Raycal asks. A commit does not imply permission to push.
+
+## Releases
+
+Create a release only when Raycal asks. Build with `scripts/build-release.sh`, upload the DMG to the GitHub release and check it, then run `scripts/prepare-update.sh` and push `appcast.xml`. Sparkle's private key is in the login Keychain under the account `cc.raycal.ReelDock` and never goes in the repository. Debug builds never update themselves.
+
+Test builds outside DerivedData stay registered with LaunchServices and can leave the Dock showing a blank icon. Unregister and delete them when done.

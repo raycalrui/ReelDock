@@ -177,6 +177,10 @@ final class DebugDriver {
             app.eject(card, from: controller)
         case "ejectstate":
             return "ejecting=\(app.ejectingCardIDs.count) cards=\(app.cards.cards.map(\.volumeName)) sounds=\(debugPlayedSounds) duration=\(debugLastEjectDuration.map { "\($0)" } ?? "nil")"
+        #if UPDATER_TEST
+        case "updatecheck":
+            return UpdateController.shared.debugCheckInBackground()
+        #endif
         case "stallstart":
             debugStallWatch.start()
         case "stallreport":
