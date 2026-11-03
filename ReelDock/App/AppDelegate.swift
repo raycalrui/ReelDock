@@ -27,7 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag { app?.addWindow() }
+        if let app, app.controllers.isEmpty { app.restoreSession() }
         return true
     }
 

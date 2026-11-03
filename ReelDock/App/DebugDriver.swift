@@ -36,6 +36,10 @@ final class DebugDriver {
 
     private func run(_ line: String) -> String {
         let parts = line.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
+        if parts[0] == "reopen" {
+            let didHandle = NSApp.delegate?.applicationShouldHandleReopen?(NSApp, hasVisibleWindows: false)
+            return "handled=\(String(describing: didHandle)) \(app.controllers.map { $0.tab.folder?.lastPathComponent ?? "blank" })"
+        }
         guard let controller = current else { return "no window" }
         let content = controller.content
         switch parts[0] {
@@ -183,6 +187,12 @@ final class DebugDriver {
         case "quit":
             NSApp.terminate(nil)
         #endif
+        case "closeall":
+            // What the red button does to a window of tabs.
+            app.controllers.forEach { $0.window?.close() }
+            return "controllers=\(app.controllers.count)"
+        case "closetab":
+            controller.window?.close()
         case "stallstart":
             debugStallWatch.start()
         case "stallreport":

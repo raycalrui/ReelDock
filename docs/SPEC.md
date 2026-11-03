@@ -69,6 +69,7 @@ Contents load only when they are shown. Real projects can contain Python environ
 - Native macOS window tabs: `⌘T` new tab, `⌘W` close, `⌘⇧[` and `⌘⇧]` switch. A tab can be dragged out into its own window.
 - A new tab shows the project list.
 - Open tabs, and the path open in each section, are restored on launch. Missing paths are skipped.
+- Closing the last window keeps them saved, so clicking the Dock icon or launching again brings them back, as after quitting.
 
 ## 4. Sidebar
 

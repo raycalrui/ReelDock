@@ -459,7 +459,10 @@ final class AppModel {
 
     func saveNow() {
         saveWork?.cancel()
-        settings.windows = currentWindowSnapshots()
+        // With every window closed, what was open stays saved, so it comes back as it does after quitting.
+        if !controllers.isEmpty {
+            settings.windows = currentWindowSnapshots()
+        }
         try? store.save(settings)
     }
 
