@@ -49,6 +49,15 @@ final class PlaybackController {
     @ObservationIgnored private var isSeeking = false
     @ObservationIgnored private var rateBeforeScrub: Float = 0
     @ObservationIgnored private var isHoldingK = false
+    @ObservationIgnored private var reverse: ReverseEngine?
+    @ObservationIgnored private var reverseRotation: CGFloat = 0
+    @ObservationIgnored private var isHandingOff = false
+    @ObservationIgnored private var handoffID = 0
+    @ObservationIgnored private var handoffRate: Float?
+    @ObservationIgnored private let surfaces = NSHashTable<PlayerSurfaceView>.weakObjects()
+    #if DEBUG
+    @ObservationIgnored private(set) var debugReverseFrames: [(clock: Double, time: Double, displayed: Int)] = []
+    #endif
 
     /// While true, each new selection loads at once, because a full-screen view has no other image of it.
     @ObservationIgnored var staysLoaded = false
@@ -86,6 +95,12 @@ final class PlaybackController {
     }
 
     func unload() {
+        reverse?.stop()
+        reverse = nil
+        isHandingOff = false
+        handoffID += 1
+        handoffRate = nil
+        surfaces.allObjects.forEach { $0.hideReverseFrames() }
         statusObservation = nil
         rateObservation = nil
         if let timeObserver { player.removeTimeObserver(timeObserver) }
@@ -113,6 +128,9 @@ final class PlaybackController {
 
     func pause() {
         pendingRate = nil
+        handoffRate = nil
+        endReverse(thenRate: nil)
+        if isHandingOff { rate = 0 }
         player.pause()
     }
 
@@ -123,7 +141,7 @@ final class PlaybackController {
     func step(_ frames: Int) {
         guard loadIfNeeded() else { return }
         pause()
-        guard let item = player.currentItem, item.status == .readyToPlay else {
+        guard !isHandingOff, let item = player.currentItem, item.status == .readyToPlay else {
             pendingSteps += frames
             return
         }
@@ -135,6 +153,10 @@ final class PlaybackController {
     func seek(to seconds: Double) {
         guard loadIfNeeded() else { return }
         time = seconds
+        if let reverse {
+            reverse.jump(to: seconds)
+            return
+        }
         guard player.currentItem?.status == .readyToPlay else {
             pendingSeek = seconds
             return
@@ -152,6 +174,17 @@ final class PlaybackController {
         if rateBeforeScrub != 0 { start(rate: rateBeforeScrub) }
         rateBeforeScrub = 0
     }
+
+    // MARK: Surfaces
+
+    func attach(_ surface: PlayerSurfaceView) {
+        surfaces.add(surface)
+        surface.reverseRotation = reverseRotation
+    }
+
+    #if DEBUG
+    var debugSurfaceGeometry: String { surfaces.allObjects.map(\.debugGeometry).joined(separator: "\n") }
+    #endif
 
     // MARK: Keys
 
@@ -208,12 +241,109 @@ final class PlaybackController {
         if target < 0, !item.canPlayReverse { return }
         if target > 1, !item.canPlayFastForward { target = 1 }
         if target < -1, !item.canPlayFastReverse { target = -1 }
+        if target < 0, -target <= ReverseEngine.maximumSpeed {
+            startReverse(rate: target)
+            return
+        }
+        if reverse != nil || isHandingOff {
+            endReverse(thenRate: target)
+            return
+        }
 
         let duration = item.duration.seconds
         if target > 0, duration.isFinite, player.currentTime().seconds >= duration - 0.001 {
             player.seek(to: .zero, toleranceBefore: .zero, toleranceAfter: .zero)
         }
         player.rate = target
+    }
+
+    /// `AVPlayer` stands still underneath while the engine shows frames on the same surfaces.
+    private func startReverse(rate newRate: Float) {
+        let speed = Double(-newRate)
+        if let reverse {
+            reverse.setSpeed(speed)
+            rate = newRate
+            return
+        }
+        let from = isSeeking ? CMTime(seconds: time, preferredTimescale: 600) : player.currentTime()
+        guard let url, from > .zero else { return }
+        handoffRate = nil
+        player.pause()
+        #if DEBUG
+        debugReverseFrames = []
+        #endif
+
+        let engine = ReverseEngine(url: url, from: from, speed: speed)
+        engine.onLoaded = { [weak self] source in
+            guard let self else { return }
+            self.reverseRotation = source.rotation
+            self.surfaces.allObjects.forEach { $0.reverseRotation = source.rotation }
+        }
+        engine.onFrame = { [weak self] frame in self?.show(frame) }
+        engine.onFinished = { [weak self] in self?.endReverse(thenRate: nil) }
+        engine.onFailed = { [weak self] in
+            guard let self else { return }
+            self.reverse = nil
+            self.surfaces.allObjects.forEach { $0.hideReverseFrames() }
+            self.player.rate = self.rate
+        }
+        reverse = engine
+        rate = newRate
+        engine.start()
+    }
+
+    private func show(_ frame: ReverseFrame) {
+        let surfaces = surfaces.allObjects
+        surfaces.forEach { $0.enqueueReverseFrame(frame.sample) }
+        let seconds = frame.time.seconds
+        // The same 30 updates a second forward playback makes.
+        if abs(seconds - time) >= 1.0 / 30 { time = seconds }
+        #if DEBUG
+        let displayed = surfaces.first?.debugDisplayedBuffer
+        debugReverseFrames.append((CACurrentMediaTime(), seconds, displayed.map { Int(bitPattern: Unmanaged.passUnretained($0).toOpaque()) } ?? 0))
+        #endif
+    }
+
+    /// Brings `AVPlayer` to the engine's frame. The engine's last frame stays up until it arrives, so nothing jumps.
+    private func endReverse(thenRate next: Float?) {
+        guard let reverse else {
+            if isHandingOff, let next {
+                handoffRate = next
+                rate = next
+            }
+            return
+        }
+        let position = reverse.position
+        reverse.stop()
+        self.reverse = nil
+        handoffRate = next
+        rate = next ?? 0
+        time = position.seconds
+        isHandingOff = true
+        isSeeking = true
+        handoffID += 1
+        let id = handoffID
+        player.seek(to: position, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor in self?.finishHandoff(id) }
+        }
+    }
+
+    private func finishHandoff(_ id: Int) {
+        guard isHandingOff, id == handoffID else { return }
+        isHandingOff = false
+        isSeeking = false
+        guard reverse == nil else { return }
+        surfaces.allObjects.forEach { $0.hideReverseFrames() }
+        if let handoffRate, let item = player.currentItem {
+            self.handoffRate = nil
+            apply(rate: handoffRate, to: item)
+        }
+        if pendingSteps != 0 {
+            let frames = pendingSteps
+            pendingSteps = 0
+            step(frames)
+        }
+        if seekTarget != nil { runSeek() }
     }
 
     private func loadIfNeeded() -> Bool {
@@ -227,14 +357,17 @@ final class PlaybackController {
         }
         rateObservation = player.observe(\.rate) { [weak self] player, _ in
             let rate = player.rate
-            Task { @MainActor in self?.rate = rate }
+            Task { @MainActor in
+                guard let self, self.reverse == nil, !self.isHandingOff else { return }
+                self.rate = rate
+            }
         }
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(value: 1, timescale: 30),
             queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated {
-                guard let self, !self.isSeeking else { return }
+                guard let self, !self.isSeeking, self.reverse == nil else { return }
                 self.time = time.seconds
             }
         }

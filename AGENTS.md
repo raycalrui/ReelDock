@@ -59,4 +59,4 @@ Client and project names, footage, and device serial numbers stay out of the rep
 ## Git
 
 - Stage only paths related to the task and review the staged diff before committing.
-- Commit or push only when Raycal asks. A commit does not imply permission to push, and no remote exists yet.
+- Commit or push only when Raycal asks. A commit does not imply permission to push.

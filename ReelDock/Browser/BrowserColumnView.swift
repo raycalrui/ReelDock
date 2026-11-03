@@ -470,12 +470,11 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
             if selection.count == 1 {
                 add("Rename", #selector(contextRename))
             }
-            if let tagMenu = browser?.host?.tagMenu(for: selection.map(\.url)) {
-                let tags = NSMenuItem(title: "Tags", action: nil, keyEquivalent: "")
-                tags.submenu = tagMenu
-                menu.addItem(tags)
-            }
             add("Move to Trash", #selector(contextTrash))
+            if !selection.isEmpty {
+                menu.addItem(.separator())
+                browser?.host?.addTagItems(to: menu, for: selection.map(\.url))
+            }
         }
         if folders.count == 1, let host = browser?.host {
             menu.addItem(.separator())

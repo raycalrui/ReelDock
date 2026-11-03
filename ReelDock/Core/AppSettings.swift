@@ -26,6 +26,8 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var windows: [WindowSnapshot] = []
     var showHidden = false
     var importPanelFraction: Double?
+    /// The display full-screen previews open on.
+    var previewDisplay: String?
 
     init() {}
 
@@ -39,6 +41,7 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         windows = try container.decodeIfPresent([WindowSnapshot].self, forKey: .windows) ?? []
         showHidden = try container.decodeIfPresent(Bool.self, forKey: .showHidden) ?? false
         importPanelFraction = try container.decodeIfPresent(Double.self, forKey: .importPanelFraction)
+        previewDisplay = try container.decodeIfPresent(String.self, forKey: .previewDisplay)
     }
 }
 

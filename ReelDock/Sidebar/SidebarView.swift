@@ -6,6 +6,10 @@ struct SidebarView: View {
     let tab: TabModel
     weak var controller: WorkspaceWindowController?
 
+    /// How far the list's selection reaches past a row's content, so a right-click anywhere on it opens the menu.
+    private static let rowInsetX: CGFloat = 6
+    private static let rowInsetY: CGFloat = 4
+
     @State private var filter = ""
     @AppStorage("sidebar.favoritesExpanded") private var favoritesExpanded = true
     @AppStorage("sidebar.projectsExpanded") private var projectsExpanded = true
@@ -127,7 +131,8 @@ struct SidebarView: View {
     }
 
     private func projectRow(_ project: ProjectEntry) -> some View {
-        HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            LeadingTagDots(tags: project.tags)
             VStack(alignment: .leading, spacing: 1) {
                 Text(project.title)
                     .lineLimit(1)
@@ -140,40 +145,72 @@ struct SidebarView: View {
                 }
             }
             Spacer(minLength: 0)
-            TagDots(tags: project.tags)
+        }
+        .overlay {
+            RowContextMenu { [weak controller] in controller?.folderContextMenu(for: project.url) }
+                .padding(.horizontal, -Self.rowInsetX)
+                .padding(.vertical, -Self.rowInsetY)
         }
         .tag("project:\(project.url.path)")
         .help(project.folderName)
-        .contextMenu { contextMenu(url: project.url) }
     }
 
     private func folderRow(path: String, tag: String, systemImage: String) -> some View {
         let url = URL(fileURLWithPath: path, isDirectory: true)
         // Favorites can be anywhere, so nothing else is watching them for tag changes.
         _ = app.tagsGeneration
-        return HStack(spacing: 6) {
-            Label(url.lastPathComponent, systemImage: systemImage)
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer(minLength: 0)
-            TagDots(tags: FinderTags.read(url))
+        let tags = FinderTags.read(url)
+        return Label {
+            HStack(spacing: 6) {
+                TagDots(tags: tags)
+                Text(url.lastPathComponent)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        } icon: {
+            Image(systemName: systemImage)
         }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay {
+                RowContextMenu { [weak controller] in controller?.folderContextMenu(for: url) }
+                    .padding(.horizontal, -Self.rowInsetX)
+                    .padding(.vertical, -Self.rowInsetY)
+            }
             .tag(tag)
             .help(path)
-            .contextMenu { contextMenu(url: url) }
+    }
+}
+
+#if DEBUG
+var debugLastRowMenu: NSMenu?
+#endif
+
+/// Lets a SwiftUI row show an `NSMenu`, because SwiftUI context menus can't hold Finder's row of color dots.
+/// Only secondary clicks land here, so ordinary clicks still reach the list.
+private struct RowContextMenu: NSViewRepresentable {
+    let makeMenu: () -> NSMenu?
+
+    final class CatcherView: NSView {
+        var makeMenu: (() -> NSMenu?)?
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            guard let event = NSApp.currentEvent,
+                  event.type == .rightMouseDown || (event.type == .leftMouseDown && event.modifierFlags.contains(.control)) else { return nil }
+            return super.hitTest(point)
+        }
+
+        override func menu(for event: NSEvent) -> NSMenu? {
+            let menu = makeMenu?()
+            #if DEBUG
+            debugLastRowMenu = menu
+            #endif
+            return menu
+        }
     }
 
-    @ViewBuilder
-    private func contextMenu(url: URL) -> some View {
-        Button("Open in New Tab") { app.open(url, from: controller, newTab: true) }
-        Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-        Menu("Tags") {
-            TagMenuItems(controller: controller, urls: [url])
-        }
-        Divider()
-        Button(app.isFavorite(url) ? "Remove from Favorites" : "Add to Favorites") {
-            app.toggleFavorite(url)
-            controller?.refreshFavoriteItem()
-        }
+    func makeNSView(context: Context) -> CatcherView { CatcherView() }
+
+    func updateNSView(_ view: CatcherView, context: Context) {
+        view.makeMenu = makeMenu
     }
 }

@@ -251,7 +251,7 @@ final class DebugDriver {
             controller.toggleFullScreenPreview()
         case "fsstate":
             let preview = NSApp.windows.first { $0.level == .statusBar }
-            return "open=\(controller.isFullScreenPreviewOpen) visible=\(preview?.isVisible ?? false) frame=\(preview?.frame ?? .zero) screen=\(controller.window?.screen?.frame ?? .zero) key=\(preview?.isKeyWindow ?? false) selection=\(controller.tab.selection.map(\.name))"
+            return "screens=\(NSScreen.screens.map(\.localizedName)) ids=\(NSScreen.screens.map { $0.stableID ?? "nil" }) open=\(controller.isFullScreenPreviewOpen) visible=\(preview?.isVisible ?? false) frame=\(preview?.frame ?? .zero) screen=\(controller.window?.screen?.frame ?? .zero) key=\(preview?.isKeyWindow ?? false) selection=\(controller.tab.selection.map(\.name))"
         case "forgetcards":
             app.cards.debugForgetCards()
         case "rescancards":
@@ -265,14 +265,131 @@ final class DebugDriver {
             return "open=\(controller.tab.isImportPanelVisible) enabled=\(controller.debugImportItem?.isEnabled ?? false) tip=\(controller.debugImportItem?.toolTip ?? "") card=\(controller.tab.importCardID ?? "nil")"
         case "tagmenu":
             guard let item = controller.tab.selection.first else { return "no selection" }
-            guard let menu = controller.tagMenu(for: [item.url]) else { return "no menu" }
-            return menu.items.map { "\($0.title):\($0.state.rawValue)" }.joined(separator: " ")
+            let menu = NSMenu()
+            controller.addTagItems(to: menu, for: [item.url])
+            return menu.items.map { entry -> String in
+                if let palette = entry.submenu, palette.presentationStyle == .palette {
+                    return "palette[" + palette.items.map { "\($0.title):\($0.state.rawValue)" }.joined(separator: " ") + "] mode=\(palette.selectionMode.rawValue)"
+                }
+                return entry.title + "{" + (entry.submenu?.items.map { "\($0.title):\($0.state.rawValue)" }.joined(separator: " ") ?? "") + "}"
+            }.joined(separator: " ")
+        case "tagcolor":
+            // tagcolor|Green|on or off: what clicking a dot does.
+            guard let tag = FinderTags.standardTags(labels: NSWorkspace.shared.fileLabels).first(where: { $0.name == parts[1] }) else { return "not found" }
+            controller.setColor(of: tag, enabled: parts[2] == "on", on: controller.tab.selection.map(\.url))
         case "tagchoose":
-            // Chooses an item from the tag menu of the selection, as a click does.
-            guard let item = controller.tab.selection.first,
-                  let menu = controller.tagMenu(for: controller.tab.selection.map(\.url)),
-                  let index = menu.items.firstIndex(where: { $0.title == parts[1] }) ?? (item.name.isEmpty ? 0 : nil) else { return "not found" }
-            menu.performActionForItem(at: index)
+            // Chooses an item from More Tags for the selection, as a click does.
+            let menu = NSMenu()
+            controller.addTagItems(to: menu, for: controller.tab.selection.map(\.url))
+            guard let more = menu.items.first(where: { $0.title == "More Tags" })?.submenu,
+                  let index = more.items.firstIndex(where: { $0.title == parts[1] }) else { return "not found" }
+            more.performActionForItem(at: index)
+        case "tabtags":
+            // What the tab bar really draws, so the title can match a tab without tags.
+            func fields(in view: NSView) -> [NSTextField] {
+                view.subviews.flatMap { ($0 as? NSTextField).map { [$0] } ?? fields(in: $0) }
+            }
+            let root = controller.window?.contentView?.superview ?? NSView()
+            let lines = fields(in: root).map { field in
+                let text = field.attributedStringValue
+                let runs = (0..<text.length).map { index -> String in
+                    let attributes = text.attributes(at: index, effectiveRange: nil)
+                    return "\((attributes[.font] as? NSFont).map { "\($0.fontName) \($0.pointSize)" } ?? "nofont") \(attributes[.foregroundColor].map { "\($0)" } ?? "nocolor")"
+                }
+                return "\(field.stringValue) frame=\(field.frame) textColor=\(field.textColor.map { "\($0)" } ?? "nil") font=\(field.font.map { "\($0.fontName) \($0.pointSize)" } ?? "nil") runs=\(Set(runs))"
+            }
+            return "attributed=\(controller.window?.tab.attributedTitle?.string ?? "nil") title=\(controller.window?.tab.title ?? "")\n" + lines.joined(separator: "\n")
+        case "snaptabs":
+            // Draws the title bar, tabs included, to a file.
+            guard let frame = controller.window?.contentView?.superview else { return "no frame" }
+            let bar = NSRect(x: 0, y: frame.bounds.height - 120, width: frame.bounds.width, height: 120)
+            guard let rep = frame.bitmapImageRepForCachingDisplay(in: bar) else { return "no rep" }
+            frame.cacheDisplay(in: bar, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+            return "ok"
+        case "sidebarrows":
+            // The frames the sidebar's rows really have.
+            guard let table = controller.debugSidebarView?.debugFirstTable else { return "no table" }
+            return "rows=\(table.numberOfRows) projects=\(app.projects.count)\n" + (0..<min(table.numberOfRows, 9)).map { row -> String in
+                let rowView = table.rowView(atRow: row, makeIfNecessary: false)
+                let cell = rowView?.subviews.first
+                return "row\(row) \(rowView?.frame ?? .zero) cell \(cell?.frame ?? .zero) clips \(cell?.clipsToBounds ?? false)"
+            }.joined(separator: "\n")
+        case "plus":
+            controller.newWindowForTab(nil)
+        case "projectclick":
+            // Opens a project the way the new-tab page's row does.
+            guard let project = app.projects.first(where: { $0.title == parts[1] }) else { return "not found" }
+            app.open(project.url, from: controller)
+        case "tabcount":
+            return "tabs=\(controller.window?.tabbedWindows?.count ?? 1) folder=\(controller.tab.folder?.lastPathComponent ?? "nil") controllers=\(app.controllers.count)"
+        case "sidebarhit":
+            // Sends a real secondary click to the sidebar row and reports the menu that comes up.
+            guard let table = controller.debugSidebarView?.debugFirstTable, let window = controller.window else { return "no table" }
+            let row = Int(parts[1]) ?? 0
+            let rect = table.rect(ofRow: row)
+            let point = table.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)
+            guard let event = NSEvent.mouseEvent(with: .rightMouseDown, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return "no event" }
+            debugLastRowMenu = nil
+            let timer = Timer(timeInterval: 0.4, repeats: false) { _ in
+                MainActor.assumeIsolated { debugLastRowMenu?.cancelTrackingWithoutAnimation() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            // Posted, not sent, so it's the app's current event, as a real click is.
+            NSApp.postEvent(event, atStart: false)
+        case "sidebarmenu":
+            return debugLastRowMenu?.items.map { $0.isSeparatorItem ? "-" : ($0.submenu?.presentationStyle == .palette ? "[palette \($0.submenu?.items.count ?? 0)]" : $0.title) }.joined(separator: " , ") ?? "no menu"
+        case "sidebarinsets":
+            // The right-click area is padded to match the selection, so its frame shows where it lands in each row.
+            guard let table = controller.debugSidebarView?.debugFirstTable else { return "no table" }
+            if parts[safe: 1] == "dump", let index = Int(parts[safe: 2] ?? ""), index < table.numberOfRows, let row = table.rowView(atRow: index, makeIfNecessary: false) {
+                func dump(_ view: NSView, _ depth: Int) -> [String] {
+                    ["\(String(repeating: " ", count: depth))\(type(of: view)) \(view.frame) clips=\(view.clipsToBounds)"] + view.subviews.flatMap { dump($0, depth + 1) }
+                }
+                return dump(row, 0).prefix(30).joined(separator: "\n")
+            }
+            return (0..<min(table.numberOfRows, 8)).compactMap { row -> String? in
+                guard let rowView = table.rowView(atRow: row, makeIfNecessary: false),
+                      let catcher = rowView.debugFirstCatcher else { return nil }
+                return "row\(row) rowSize=\(rowView.bounds.size) menuArea=\(catcher.convert(catcher.bounds, to: rowView)) selected=\(rowView.isSelected)"
+            }.joined(separator: "\n")
+        case "contentviews":
+            func walk(_ view: NSView, _ depth: Int) -> [String] {
+                guard depth < 9 else { return [] }
+                let title = (view as? NSButton)?.title ?? ""
+                return ["\(String(repeating: " ", count: depth))\(String(describing: type(of: view)).prefix(50)) \(view.convert(view.bounds, to: nil)) \(title)"] + view.subviews.flatMap { walk($0, depth + 1) }
+            }
+            return walk(content.view, 0).prefix(24).joined(separator: "\n")
+        case "snapsidebar":
+            guard let view = controller.debugSidebarView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no view" }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+        case "snapcontent":
+            let view = content.view
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no view" }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+        case "tagpalette":
+            // Clicks a dot, through the palette's own handler.
+            let menu = NSMenu()
+            controller.addTagItems(to: menu, for: controller.tab.selection.map(\.url))
+            guard let palette = menu.items.first?.submenu,
+                  let index = palette.items.firstIndex(where: { $0.title == parts[1] }) else { return "not found" }
+            palette.performActionForItem(at: index)
+            return "state=\(palette.items[index].state.rawValue)"
+        case "fschoose":
+            NSApp.windows.first { $0.level == .statusBar }.map { _ in controller.debugChooseScreen() }
+        case "reversegeom":
+            return controller.tab.playback.debugSurfaceGeometry
+        case "reversereport":
+            let frames = controller.tab.playback.debugReverseFrames
+            guard frames.count > 1 else { return "frames=\(frames.count)" }
+            let settled = frames.dropFirst(5)
+            let gaps = zip(settled, settled.dropFirst()).map { ($1.clock - $0.clock) * 1000 }.sorted()
+            let span = (settled.last?.clock ?? 0) - (settled.first?.clock ?? 0)
+            let backward = zip(frames, frames.dropFirst()).allSatisfy { $1.time <= $0.time }
+            let distinct = zip(frames, frames.dropFirst()).filter { $0.displayed != $1.displayed }.count
+            return String(format: "frames=%d fps=%.1f median=%.1fms p95=%.1fms max=%.1fms source=%.3f..%.3f backward=%@ displayedChanges=%d", frames.count, Double(settled.count) / max(span, 0.001), gaps[gaps.count / 2], gaps[Int(Double(gaps.count) * 0.95)], gaps.last ?? 0, frames.first?.time ?? 0, frames.last?.time ?? 0, backward ? "yes" : "no", distinct)
         case "tags":
             let url = URL(fileURLWithPath: parts[1])
             return FinderTags.read(url).map { "\($0.name):\($0.colorIndex)" }.joined(separator: ",")
@@ -396,6 +513,24 @@ extension TabContentViewController {
 
     func debugBrowser(_ title: String) -> ColumnBrowserView? {
         title == "single" ? debugSingle : debugPane(title)?.browser
+    }
+}
+
+private extension NSView {
+    var debugFirstCatcher: NSView? {
+        if String(describing: type(of: self)).contains("CatcherView") { return self }
+        for view in subviews {
+            if let catcher = view.debugFirstCatcher { return catcher }
+        }
+        return nil
+    }
+
+    var debugFirstTable: NSTableView? {
+        if let table = self as? NSTableView, table.numberOfRows > 0 { return table }
+        for view in subviews {
+            if let table = view.debugFirstTable { return table }
+        }
+        return nil
     }
 }
 #endif

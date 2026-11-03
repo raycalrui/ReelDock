@@ -9,16 +9,6 @@ private extension NSToolbarItem.Identifier {
     static let importActivity = NSToolbarItem.Identifier("importActivity")
 }
 
-private final class TagMenuAction {
-    let choice: TagChoice
-    let urls: [URL]
-
-    init(choice: TagChoice, urls: [URL]) {
-        self.choice = choice
-        self.urls = urls
-    }
-}
-
 /// One native window tab, holding one folder.
 final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NSToolbarDelegate, NSMenuItemValidation {
     private unowned let app: AppModel
@@ -39,6 +29,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     #if DEBUG
     var debugInspectorItem: NSSplitViewItem? { inspectorItem }
     var debugImportItem: NSToolbarItem? { importItem }
+    var debugSidebarView: NSView? { splitController.splitViewItems.first?.viewController.view }
+    func debugChooseScreen() {
+        if let screen = NSScreen.screens.last { fullScreenPreview?.choose(screen) }
+    }
     #endif
 
     init(app: AppModel) {
@@ -123,6 +117,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         window?.representedURL = folder
         modeControl.selectedSegment = mode == .sections ? 0 : 1
         refreshFavoriteItem()
+        refreshTabTags()
         content.display(restoring: snapshot)
         app.scheduleSessionSave()
     }
@@ -132,6 +127,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         window?.title = "ReelDock"
         window?.representedURL = nil
         refreshFavoriteItem()
+        refreshTabTags()
         content.display()
         app.scheduleSessionSave()
     }
@@ -440,37 +436,99 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         }
     }
 
-    func tagMenu(for urls: [URL]) -> NSMenu? {
-        guard !urls.isEmpty, !urls.contains(where: FileOperations.isOnCameraCard) else { return nil }
+    /// Finder's row of color dots, then the tags with their own names.
+    func addTagItems(to menu: NSMenu, for urls: [URL]) {
+        guard !urls.isEmpty, !urls.contains(where: FileOperations.isOnCameraCard) else { return }
+        let palette = NSMenuItem()
+        palette.submenu = tagPalette(for: urls)
+        menu.addItem(palette)
+        let more = NSMenuItem(title: "More Tags", action: nil, keyEquivalent: "")
+        more.submenu = moreTagsMenu(for: urls)
+        menu.addItem(more)
+    }
+
+    private func tagPalette(for urls: [URL]) -> NSMenu {
+        let standard = FinderTags.standardTags(labels: NSWorkspace.shared.fileLabels)
+        var selected = FinderTags.sharedColors(among: urls.map(FinderTags.read))
+        let palette = NSMenu.palette(
+            colors: standard.compactMap(\.color),
+            titles: standard.map(\.name)
+        ) { [weak self] menu in
+            let now = Set(menu.selectedItems.map { standard[menu.index(of: $0)].colorIndex })
+            for tag in standard where now.contains(tag.colorIndex) != selected.contains(tag.colorIndex) {
+                self?.setColor(of: tag, enabled: now.contains(tag.colorIndex), on: urls)
+            }
+            selected = now
+        }
+        palette.selectionMode = .selectAny
+        palette.selectedItems = zip(palette.items, standard).filter { selected.contains($1.colorIndex) }.map(\.0)
+        return palette
+    }
+
+    private func moreTagsMenu(for urls: [URL]) -> NSMenu {
+        let standard = Set(NSWorkspace.shared.fileLabels)
         let menu = NSMenu()
-        for choice in tagChoices(for: urls) {
-            let item = NSMenuItem(title: choice.tag.name, action: #selector(tagMenuItemChosen(_:)), keyEquivalent: "")
-            item.target = self
+        for choice in tagChoices(for: urls) where !standard.contains(choice.tag.name) {
+            let item = NSMenuItem.closure(choice.tag.name) { [weak self] in self?.toggle(choice, on: urls) }
             item.image = choice.tag.menuImage
             item.state = switch choice.state {
             case .all: .on
             case .some: .mixed
             case .none: .off
             }
-            item.representedObject = TagMenuAction(choice: choice, urls: urls)
             menu.addItem(item)
         }
-        menu.addItem(.separator())
-        let newTag = NSMenuItem(title: "New Tag…", action: #selector(newTagMenuItemChosen(_:)), keyEquivalent: "")
-        newTag.target = self
-        newTag.representedObject = urls
-        menu.addItem(newTag)
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+        menu.addItem(NSMenuItem.closure("New Tag…") { [weak self] in self?.promptForNewTag(on: urls) })
         return menu
     }
 
-    @objc private func tagMenuItemChosen(_ sender: NSMenuItem) {
-        guard let action = sender.representedObject as? TagMenuAction else { return }
-        toggle(action.choice, on: action.urls)
+    func setColor(of tag: FinderTag, enabled: Bool, on urls: [URL]) {
+        applyTagNames(urls.map { url in
+            (url, FinderTags.names(FinderTags.read(url), settingColorOf: tag, enabled: enabled))
+        })
     }
 
-    @objc private func newTagMenuItemChosen(_ sender: NSMenuItem) {
-        guard let urls = sender.representedObject as? [URL] else { return }
-        promptForNewTag(on: urls)
+    func showTagMenu(for urls: [URL]) {
+        let menu = NSMenu()
+        addTagItems(to: menu, for: urls)
+        guard !menu.items.isEmpty else { return }
+        menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
+    }
+
+    func folderContextMenu(for url: URL) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem.closure("Open in New Tab") { [weak self] in
+            self?.app.open(url, from: self, newTab: true)
+        })
+        menu.addItem(NSMenuItem.closure("Reveal in Finder") {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        })
+        menu.addItem(.separator())
+        addTagItems(to: menu, for: [url])
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem.closure(app.isFavorite(url) ? "Remove from Favorites" : "Add to Favorites") { [weak self] in
+            self?.app.toggleFavorite(url)
+            self?.refreshFavoriteItem()
+        })
+        return menu
+    }
+
+    /// A tab's accessory view sits at its far edge, so the dots go in the title to stay next to the name.
+    /// They are an image because the tab recolors its title's text.
+    func refreshTabTags() {
+        guard let window else { return }
+        let tags = tab.folder.map(FinderTags.read) ?? []
+        guard !tags.isEmpty else {
+            window.tab.attributedTitle = nil
+            return
+        }
+        let dots = NSTextAttachment()
+        dots.image = TagDotsView.image(of: tags)
+        dots.bounds = NSRect(origin: NSPoint(x: 0, y: -1), size: dots.image?.size ?? .zero)
+        let title = NSMutableAttributedString(attachment: dots)
+        title.append(NSAttributedString(string: " " + window.title))
+        window.tab.attributedTitle = title
     }
 
     // MARK: Playback keys
@@ -492,7 +550,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         if event.type == .keyDown {
             switch event.keyCode {
             case 53: // Escape
-                if inFullScreen {
+                // The preview can be on another display, with this window still key.
+                if fullScreenPreview != nil {
                     toggleFullScreenPreview()
                     return true
                 }
@@ -502,7 +561,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
                 }
                 return false
             case 3, 35: // F and P
-                guard inFullScreen || canPreviewFullScreen else { return false }
+                guard fullScreenPreview != nil || canPreviewFullScreen else { return false }
                 if !event.isARepeat { toggleFullScreenPreview() }
                 return true
             case 125, 126 where inFullScreen: // Down and Up move through the list behind the preview.
@@ -540,28 +599,27 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     func toggleFullScreenPreview() {
         if let fullScreenPreview {
-            guard !fullScreenPreview.isClosing else { return }
-            fullScreenPreview.dismiss(to: previewFrame(on: fullScreenPreview.window.screen ?? window?.screen)) { [weak self] in
-                self?.fullScreenPreview = nil
-                self?.tab.playback.staysLoaded = false
-                self?.window?.makeKeyAndOrderFront(nil)
-            }
-        } else if canPreviewFullScreen, let screen = window?.screen ?? NSScreen.main {
+            fullScreenPreview.close()
+            self.fullScreenPreview = nil
+            tab.playback.staysLoaded = false
+            window?.makeKeyAndOrderFront(nil)
+        } else if canPreviewFullScreen, let screen = previewScreen {
             tab.playback.staysLoaded = true
             tab.playback.prepare()
-            let preview = FullScreenPreview(tab: tab) { [weak self] in self?.toggleFullScreenPreview() }
+            let preview = FullScreenPreview(
+                tab: tab,
+                screen: screen,
+                onChooseScreen: { [weak self] in self?.app.setPreviewDisplay($0.stableID) },
+                onClose: { [weak self] in self?.toggleFullScreenPreview() }
+            )
             fullScreenPreview = preview
-            preview.present(from: previewFrame(on: screen), on: screen)
+            preview.present()
         }
     }
 
-    /// The inspector's preview, or the middle of the screen if the inspector is hidden.
-    private func previewFrame(on screen: NSScreen?) -> NSRect {
-        if let anchor = tab.previewAnchor, let window = anchor.window, inspectorItem?.isCollapsed == false, !anchor.visibleRect.isEmpty {
-            return window.convertToScreen(anchor.convert(anchor.bounds, to: nil))
-        }
-        let frame = screen?.frame ?? .zero
-        return frame.insetBy(dx: frame.width * 0.3, dy: frame.height * 0.3)
+    /// The display chosen last time if it's connected, otherwise the one this window is on.
+    private var previewScreen: NSScreen? {
+        NSScreen.screens.first { $0.stableID == app.settings.previewDisplay } ?? window?.screen ?? NSScreen.main
     }
 
     // MARK: Window
@@ -569,7 +627,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     func windowWillClose(_ notification: Notification) {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
         keyMonitor = nil
-        fullScreenPreview?.closeImmediately()
+        fullScreenPreview?.close()
         fullScreenPreview = nil
         tab.playback.staysLoaded = false
         tab.playback.unload()

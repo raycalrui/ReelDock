@@ -22,7 +22,10 @@ Goal: replace Finder for browsing, with no writes to any user files.
 - [x] Stacked sections with collapse, resize, and maximize (collapse and maximize scripted, divider drag not exercised)
 - [x] Column browser in each section, with thumbnails and keyboard navigation (scripted, column resize not exercised)
 - [x] Inspector with metadata, inline playback with J, K, and L, and a frame grid (keys and rendering scripted on generated clips and a real card, not seen playing on screen)
-- [x] Full-screen preview with F or P (keys and final frame scripted, zoom animation not seen on screen)
+- [x] Full-screen preview with F or P and no animation (keys and final frame scripted, not seen on screen)
+- [x] Choosing the full-screen display (not exercised on a second display: only one was connected)
+- [x] Smooth backward playback at 1× and 2× (60 frames a second reach the display layer on a real 4K60 HEVC clip, not judged by eye; rotation checked by layer geometry only)
+- [x] New tabs list the projects, with Open Folder kept (scripted, rendering checked off screen)
 - [x] Sideways scrolling of a section's columns (scripted with synthetic scroll events, real trackpad not exercised)
 - [x] Drag files out into DaVinci Resolve and Finder (not exercised)
 - [x] Favorites, ordinary folders, and mode switching (scripted, except sidebar clicks and drops)
@@ -62,7 +65,8 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 - [ ] Drag in and between sections
 - [ ] Make dragging to Finder copy files. It currently creates an alias, because dragging out only allows copy and link.
 - [x] Read tags and colors, and show them on rows, section headers, favorites, and the project list (colors read from real projects, rendering scripted on fixtures, sidebar not seen on screen)
-- [x] Write tags on single and multiple selections, with suggestions and undo (scripted on fixtures through the context menu's actions, menus not seen on screen, not yet checked in Finder)
+- [x] Write tags on single and multiple selections, with Finder's color row and undo (scripted on fixtures through the palette's own handler, menus not seen on screen, not yet checked in Finder)
+- [x] Show tag dots in front of names on projects, favorites, the new-tab list, and tabs (tabs and the new-tab list seen in snapshots, sidebar not seen on screen)
 - [ ] Filter projects by tag
 - [ ] New project from template
 

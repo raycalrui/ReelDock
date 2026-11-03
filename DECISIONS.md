@@ -104,7 +104,19 @@ Reading a file's tag names from the file system leaves out their colors, so Reel
 
 ## The full-screen preview is a borderless window
 
-A native full-screen window moves to its own Space with a slow transition, which is wrong for a quick look at a clip. A borderless window above the menu bar opens instantly and can zoom out of the inspector's preview. It hides when the app is deactivated, so it never covers other apps.
+A native full-screen window moves to its own Space with a slow transition, which is wrong for a quick look at a clip. A borderless window above the menu bar opens instantly. Raycal asked for no animation at all, so it has none. It hides when the app is deactivated, so it never covers other apps.
+
+## Slow backward playback doesn't use AVPlayer
+
+Measured on a 4K 59.94p HEVC 10-bit clip with one-second keyframes: `AVPlayer` delivers 18 frames a second at -1× and 34 at -2×, with or without audio, but 58 at -4×. The decoder alone manages about 500 frames a second at 1080p. So at 1× and 2×, ReelDock decodes a stretch forward with `AVAssetReader` and shows it backward on a sample-buffer layer above the player, reaching 60 frames a second. Frames are scaled to 1920 pixels because a stretch is held in memory whole. At 4× and 8×, `AVPlayer` stays, since decoding that many stretches wouldn't keep up. Decoded frames arrive unrotated, so the layer is rotated to match the clip.
+
+## Tag menus are AppKit menus
+
+Finder's row of color dots is `NSMenu.palette`, which a SwiftUI context menu can't hold. The sidebar's rows therefore catch secondary clicks with a small AppKit view and show an `NSMenu`, so every tag menu in the app is the same one.
+
+## Tags show as dots in front of the name
+
+A faint background in the tag's color was tried on project rows and rejected after use, since it made the list look heavy. Dots at the far edge sat too far from the name, so they go in front of it. `NSWindowTab.accessoryView` always sits at the tab's far edge, so tabs put the dots in `attributedTitle` instead. They are an image there because the tab recolors its title's text, which turns a colored glyph gray.
 
 ## A card opens its panel when it appears
 

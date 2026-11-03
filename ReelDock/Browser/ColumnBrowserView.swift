@@ -12,7 +12,7 @@ protocol BrowserHost: AnyObject {
     func createFolder(in folder: URL) -> URL?
     func renameItem(at url: URL, to name: String) -> URL?
     func moveToTrash(_ urls: [URL]) async
-    func tagMenu(for urls: [URL]) -> NSMenu?
+    func addTagItems(to menu: NSMenu, for urls: [URL])
 }
 
 private final class FlippedView: NSView {

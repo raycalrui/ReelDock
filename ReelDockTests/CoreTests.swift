@@ -340,6 +340,25 @@ private struct Fixture {
 }
 
 @Suite struct PlaybackTests {
+    @Test func reverseDecodingFitsAPreview() {
+        #expect(ReverseDecoder.decodeSize(for: CGSize(width: 3840, height: 2160)) == CGSize(width: 1920, height: 1080))
+        #expect(ReverseDecoder.decodeSize(for: CGSize(width: 2160, height: 3840)) == CGSize(width: 1080, height: 1920))
+        #expect(ReverseDecoder.decodeSize(for: CGSize(width: 1280, height: 720)) == CGSize(width: 1280, height: 720))
+    }
+
+    @Test func reverseDecodingSkipsWhatTheDisplayCantShow() {
+        #expect(ReverseDecoder.frameStride(frameRate: 59.94, speed: 1) == 1)
+        #expect(ReverseDecoder.frameStride(frameRate: 59.94, speed: 2) == 2)
+        #expect(ReverseDecoder.frameStride(frameRate: 23.976, speed: 2) == 1)
+        #expect(ReverseDecoder.frameStride(frameRate: 119.88, speed: 1) == 2)
+    }
+
+    @Test func reverseRotationReadsTheClipsTransform() {
+        let quarter = ReverseDecoder.rotation(of: CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: 2160, ty: 0))
+        #expect(abs(quarter - .pi / 2) < 0.001)
+        #expect(ReverseDecoder.rotation(of: .identity) == 0)
+    }
+
     @Test func shuttleDoublesThenCaps() {
         #expect(Shuttle.rate(after: 0, forward: true) == 1)
         #expect(Shuttle.rate(after: 1, forward: true) == 2)
@@ -414,6 +433,27 @@ private struct Fixture {
 
         let items = try FolderReader.read(folder, showHidden: false)
         #expect(items.first?.tags.map(\.colorIndex) == [2])
+    }
+
+    @Test func colorsCountOnlyWhenEveryItemHasThem() {
+        let green = FinderTag(name: "Green", colorIndex: 2)
+        let done = FinderTag(name: "Done", colorIndex: 2)
+        let red = FinderTag(name: "Red", colorIndex: 6)
+        let plain = FinderTag(name: "BGM", colorIndex: 0)
+        #expect(FinderTags.sharedColors(among: [[green, red], [done]]) == [2])
+        #expect(FinderTags.sharedColors(among: [[green], []]) == [])
+        #expect(FinderTags.sharedColors(among: [[plain]]) == [])
+        #expect(FinderTags.sharedColors(among: []) == [])
+    }
+
+    @Test func settingAColorActsOnEveryTagOfThatColor() {
+        let green = FinderTag(name: "Green", colorIndex: 2)
+        let done = FinderTag(name: "Done", colorIndex: 2)
+        let plain = FinderTag(name: "BGM", colorIndex: 0)
+        #expect(FinderTags.names([plain], settingColorOf: green, enabled: true) == ["BGM", "Green"])
+        // A tag of that color already counts, so turning it on adds nothing.
+        #expect(FinderTags.names([done, plain], settingColorOf: green, enabled: true) == ["Done", "BGM"])
+        #expect(FinderTags.names([done, green, plain], settingColorOf: green, enabled: false) == ["BGM"])
     }
 
     @Test func settingATagKeepsTheOthers() {

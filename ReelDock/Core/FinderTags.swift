@@ -74,6 +74,19 @@ nonisolated enum FinderTags {
         return enabled ? others + [name] : others
     }
 
+    /// The colors every item has, by any tag of that color. This is what the row of color dots shows checked.
+    static func sharedColors(among current: [[FinderTag]]) -> Set<Int> {
+        guard let first = current.first else { return [] }
+        return current.dropFirst().reduce(Set(first.map(\.colorIndex))) { $0.intersection($1.map(\.colorIndex)) }.subtracting([0])
+    }
+
+    /// Turning a color off removes every tag of that color, not only the one named after it.
+    static func names(_ current: [FinderTag], settingColorOf tag: FinderTag, enabled: Bool) -> [String] {
+        let others = current.filter { $0.colorIndex != tag.colorIndex }.map(\.name)
+        guard enabled else { return others }
+        return current.contains { $0.colorIndex == tag.colorIndex } ? current.map(\.name) : others + [tag.name]
+    }
+
     static func isValidName(_ name: String) -> Bool {
         !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !name.contains("\n")
     }

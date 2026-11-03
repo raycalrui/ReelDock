@@ -135,7 +135,7 @@ private struct SingleItemInspector: View {
                     .frame(width: 64, height: 64)
             }
             if item.isPlayable {
-                PlayerLayerRepresentable(player: playback.player)
+                PlayerLayerRepresentable(playback: playback)
                 PlayerOverlay(playback: playback)
             } else if item.canPreviewFullScreen {
                 FullScreenButton(isFullScreen: false) { controller?.toggleFullScreenPreview() }
@@ -146,7 +146,6 @@ private struct SingleItemInspector: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
             }
         }
-        .background(PreviewAnchor(tab: tab))
         .clipShape(RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
         .onTapGesture {
@@ -535,59 +534,98 @@ private struct MultipleItemsInspector: View {
     }
 }
 
-/// Marks the preview's place on screen, because SwiftUI doesn't expose its views.
-private struct PreviewAnchor: NSViewRepresentable {
-    let tab: TabModel
+/// A bare video layer. Taking no mouse or key focus keeps Space and J K L with the file list.
+final class PlayerSurfaceView: NSView {
+    let playerLayer = AVPlayerLayer()
+    /// Above the player, for frames the player can't show smoothly itself.
+    private let reverseLayer = AVSampleBufferDisplayLayer()
 
-    final class AnchorView: NSView {
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    var reverseRotation: CGFloat = 0 {
+        didSet {
+            guard reverseRotation != oldValue else { return }
+            needsLayout = true
+        }
     }
 
-    func makeNSView(context: Context) -> AnchorView { AnchorView() }
-
-    func updateNSView(_ view: AnchorView, context: Context) {
-        tab.previewAnchor = view
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        playerLayer.videoGravity = .resizeAspect
+        layer?.addSublayer(playerLayer)
+        reverseLayer.videoGravity = .resizeAspect
+        reverseLayer.isHidden = true
+        layer?.addSublayer(reverseLayer)
     }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        playerLayer.frame = bounds
+        // Decoded frames arrive unrotated. Layers here have y going up, so a clockwise turn is negative.
+        let sideways = abs(sin(reverseRotation)) > 0.5
+        reverseLayer.setAffineTransform(.identity)
+        reverseLayer.bounds = CGRect(
+            x: 0,
+            y: 0,
+            width: sideways ? bounds.height : bounds.width,
+            height: sideways ? bounds.width : bounds.height
+        )
+        reverseLayer.position = CGPoint(x: bounds.midX, y: bounds.midY)
+        reverseLayer.setAffineTransform(CGAffineTransform(rotationAngle: -reverseRotation))
+        CATransaction.commit()
+    }
+
+    func enqueueReverseFrame(_ sample: CMSampleBuffer) {
+        let renderer = reverseLayer.sampleBufferRenderer
+        if renderer.requiresFlushToResumeDecoding { renderer.flush() }
+        renderer.enqueue(sample)
+        guard reverseLayer.isHidden else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        reverseLayer.isHidden = false
+        CATransaction.commit()
+    }
+
+    func hideReverseFrames() {
+        guard !reverseLayer.isHidden else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        reverseLayer.isHidden = true
+        CATransaction.commit()
+        reverseLayer.sampleBufferRenderer.flush(removingDisplayedImage: true, completionHandler: nil)
+    }
+
+    #if DEBUG
+    var debugDisplayedBuffer: CVPixelBuffer? { reverseLayer.sampleBufferRenderer.displayedPixelBuffer() }
+    /// Where the right edge of an unrotated frame lands in this view, which has y going up.
+    var debugGeometry: String {
+        guard let root = layer else { return "no layer" }
+        let edge = reverseLayer.convert(CGPoint(x: reverseLayer.bounds.maxX, y: reverseLayer.bounds.midY), to: root)
+        return "rotation=\(reverseRotation) rootFlipped=\(root.isGeometryFlipped) reverseFlipped=\(reverseLayer.contentsAreFlipped()) viewFlipped=\(isFlipped) view=\(bounds.size) layerBounds=\(reverseLayer.bounds.size) rightEdge=\(edge) hidden=\(reverseLayer.isHidden)"
+    }
+    #endif
+
+    override var acceptsFirstResponder: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
-/// A bare video layer. Taking no mouse or key focus keeps Space and J K L with the file list.
 struct PlayerLayerRepresentable: NSViewRepresentable {
-    let player: AVPlayer
+    let playback: PlaybackController
 
-    final class LayerView: NSView {
-        let playerLayer = AVPlayerLayer()
-
-        override init(frame frameRect: NSRect) {
-            super.init(frame: frameRect)
-            wantsLayer = true
-            playerLayer.videoGravity = .resizeAspect
-            layer?.addSublayer(playerLayer)
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
-
-        override func layout() {
-            super.layout()
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            playerLayer.frame = bounds
-            CATransaction.commit()
-        }
-
-        override var acceptsFirstResponder: Bool { false }
-        override func hitTest(_ point: NSPoint) -> NSView? { nil }
-    }
-
-    func makeNSView(context: Context) -> LayerView {
-        let view = LayerView()
-        view.playerLayer.player = player
+    func makeNSView(context: Context) -> PlayerSurfaceView {
+        let view = PlayerSurfaceView()
+        view.playerLayer.player = playback.player
+        playback.attach(view)
         return view
     }
 
-    func updateNSView(_ view: LayerView, context: Context) {}
+    func updateNSView(_ view: PlayerSurfaceView, context: Context) {}
 
-    static func dismantleNSView(_ view: LayerView, coordinator: ()) {
+    static func dismantleNSView(_ view: PlayerSurfaceView, coordinator: ()) {
         view.playerLayer.player = nil
     }
 }

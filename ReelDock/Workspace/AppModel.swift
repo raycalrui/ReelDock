@@ -9,8 +9,6 @@ final class TabModel {
         didSet { playback.follow(selection) }
     }
     let playback = PlaybackController()
-    /// Where the inspector's preview sits, so full screen can zoom out of it.
-    @ObservationIgnored weak var previewAnchor: NSView?
     var isImportPanelVisible = false
     var importCardID: String?
 }
@@ -118,8 +116,16 @@ final class AppModel {
             let result = await Task.detached(priority: .userInitiated) {
                 try? ProjectCatalog.list(root: root)
             }.value
+            let wasEmpty = projects.isEmpty
             projects = result ?? []
             projectRootIsMissing = result == nil
+            controllers.forEach { $0.refreshTabTags() }
+            // The new-tab page shows the list once it's there. Until then it's a plain page.
+            if wasEmpty, !projects.isEmpty {
+                for controller in controllers where controller.tab.folder == nil {
+                    controller.content.display()
+                }
+            }
         }
     }
 
@@ -314,6 +320,10 @@ final class AppModel {
         if let existing = self.controller(showing: url) {
             existing.window?.tabGroup?.selectedWindow = existing.window
             existing.window?.makeKeyAndOrderFront(nil)
+            // A blank tab that asked for this has nothing left to show.
+            if let controller, controller !== existing, controller.tab.folder == nil {
+                controller.window?.close()
+            }
             return
         }
         let target: WorkspaceWindowController
@@ -394,6 +404,11 @@ final class AppModel {
 
     func setImportPanelFraction(_ fraction: CGFloat) {
         settings.importPanelFraction = Double(fraction)
+        scheduleSessionSave()
+    }
+
+    func setPreviewDisplay(_ id: String?) {
+        settings.previewDisplay = id
         scheduleSessionSave()
     }
 

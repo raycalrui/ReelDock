@@ -97,7 +97,8 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 - A clip opens only when it first plays, so browsing doesn't read whole files. If a clip is playing when the selection moves to another one, the next one plays too, at normal speed.
 - Playback pauses when the inspector is hidden or the tab goes to the background. Pressing Space with the inspector hidden shows it.
 - The preview follows the file's shape, so vertical footage and photos can use most of the panel's height.
-- Full screen zooms out of the inspector's preview and back into it, covers the menu bar and Dock on that screen, and stays in the current Space. Playback keys keep working, Up and Down move through the list behind it, and controls hide after a moment without mouse movement. Moving to something that can't be shown closes it.
+- Backward playback at 1× and 2× shows every frame the display can, decoded at up to 1920 pixels on the long side and silent. At 4× and 8× it uses `AVPlayer`, which is already smooth there. Pausing returns to the same frame at full resolution.
+- Full screen opens and closes with no animation, covers the menu bar and Dock on that screen, and stays in the current Space. With more than one display, its controls offer the others. The choice is remembered, and falls back to the window's display when that one isn't connected. Playback keys keep working, Up and Down move through the list behind it, and controls hide after a moment without mouse movement. Moving to something that can't be shown closes it.
 - Below a landscape video's details, a grid of evenly spaced frames fills the remaining height, showing only whole rows. Clicking a frame jumps there, and the frame nearest the playhead is outlined.
 
 ## 5. File operations
@@ -128,7 +129,9 @@ Tags are the real Finder tags, not a private copy. Tested on macOS 27.2:
 
 Behavior:
 
-- Tag dots appear on rows, section headers, favorites, and project-list entries. A tag with no color shows as a hollow dot.
+- Tag dots appear on rows, section headers, favorites, project-list entries, and window tabs. A tag with no color shows as a hollow dot.
+- In the sidebar, the new-tab project list, and window tabs, dots sit in front of the name. Project lists keep that space on untagged rows so titles line up.
+- Menus use Finder's row of seven color dots. A dot is checked when every selected item has a tag of that color, and unchecking it removes every tag of that color. Tags with other names, and New Tag, are under More Tags.
 - Tags can be applied to multi-selections from the inspector or the context menu, and undone. A shortcut is not built yet.
 - Suggestions come from the seven standard color tags plus tags seen on files. No public API listing Finder's full tag catalog was found.
 - Setting a color on a brand-new tag is out of scope for v1. Users can create the color in Finder.

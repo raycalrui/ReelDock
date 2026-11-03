@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import Observation
 import SwiftUI
 
 private final class FullScreenPreviewWindow: NSWindow {
@@ -7,16 +8,30 @@ private final class FullScreenPreviewWindow: NSWindow {
     override var canBecomeMain: Bool { false }
 }
 
+extension NSScreen {
+    /// Survives reconnecting the display, unlike the display number.
+    var stableID: String? {
+        guard let number = deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let uuid = CGDisplayCreateUUIDFromDisplayID(number)?.takeRetainedValue() else { return nil }
+        return CFUUIDCreateString(nil, uuid) as String
+    }
+}
+
 /// Covers one screen without leaving the current Space, which a native full-screen window would.
-/// It zooms out of the inspector's preview and back into it.
+/// It opens and closes with no animation, because the point is speed.
+@Observable
 final class FullScreenPreview {
-    private static let duration: TimeInterval = 0.26
+    @ObservationIgnored let window: NSWindow
+    private(set) var screens = NSScreen.screens
+    private(set) var screen: NSScreen
 
-    let window: NSWindow
-    private(set) var isClosing = false
+    @ObservationIgnored private let onChooseScreen: (NSScreen) -> Void
+    @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
 
-    init(tab: TabModel, onClose: @escaping () -> Void) {
-        window = FullScreenPreviewWindow(contentRect: .zero, styleMask: .borderless, backing: .buffered, defer: false)
+    init(tab: TabModel, screen: NSScreen, onChooseScreen: @escaping (NSScreen) -> Void, onClose: @escaping () -> Void) {
+        self.screen = screen
+        self.onChooseScreen = onChooseScreen
+        window = FullScreenPreviewWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.backgroundColor = .black
         window.isOpaque = true
         // Above the menu bar and the Dock. Hiding on deactivate keeps it from covering other apps.
@@ -24,38 +39,43 @@ final class FullScreenPreview {
         window.hidesOnDeactivate = true
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
-        let host = NSHostingView(rootView: FullScreenPreviewView(tab: tab, onClose: onClose))
+        let host = NSHostingView(rootView: FullScreenPreviewView(tab: tab, preview: self, onClose: onClose))
         host.sizingOptions = []
         window.contentView = host
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.screensDidChange() }
+        }
     }
 
-    func present(from source: NSRect, on screen: NSScreen) {
-        window.setFrame(source, display: false)
+    func present() {
+        window.setFrame(screen.frame, display: false)
+        window.contentView?.layoutSubtreeIfNeeded()
         window.makeKeyAndOrderFront(nil)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(screen.frame, display: true)
-        }
     }
 
-    func dismiss(to target: NSRect, completion: @escaping @MainActor () -> Void) {
-        isClosing = true
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = Self.duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            window.animator().setFrame(target, display: true)
-        } completionHandler: { [window] in
-            MainActor.assumeIsolated {
-                window.orderOut(nil)
-                completion()
-            }
-        }
+    func choose(_ screen: NSScreen) {
+        self.screen = screen
+        window.setFrame(screen.frame, display: true)
+        onChooseScreen(screen)
     }
 
-    func closeImmediately() {
-        isClosing = true
+    func close() {
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
+        screenObserver = nil
         window.orderOut(nil)
+        window.contentView = nil
+    }
+
+    /// A display was unplugged or changed resolution. Falls back to a remaining one, and doesn't remember that as a choice.
+    private func screensDidChange() {
+        screens = NSScreen.screens
+        let id = screen.stableID
+        screen = screens.first { $0.stableID == id } ?? NSScreen.main ?? screens.first ?? screen
+        window.setFrame(screen.frame, display: true)
     }
 }
 
@@ -63,12 +83,24 @@ private struct FullScreenPreviewView: View {
     private static let controlsTimeout: Duration = .milliseconds(2500)
 
     let tab: TabModel
+    let preview: FullScreenPreview
     let onClose: () -> Void
 
     @State private var picture: NSImage?
     @State private var media: MediaInfo?
-    @State private var controlsVisible = false
+    @State private var controlsVisible = true
     @State private var activity = 0
+
+    init(tab: TabModel, preview: FullScreenPreview, onClose: @escaping () -> Void) {
+        self.tab = tab
+        self.preview = preview
+        self.onClose = onClose
+        // The inspector's image shows at once, so full screen never opens on black.
+        if tab.selection.count == 1 {
+            let item = tab.selection[0]
+            _picture = State(initialValue: ThumbnailCache.shared.cached(item.url, modified: item.modified, size: InspectorPreview.posterSize))
+        }
+    }
 
     private var item: FolderItem? {
         tab.selection.count == 1 ? tab.selection[0] : nil
@@ -83,7 +115,7 @@ private struct FullScreenPreviewView: View {
                     .aspectRatio(contentMode: .fit)
             }
             if item?.isPlayable == true {
-                PlayerLayerRepresentable(player: tab.playback.player)
+                PlayerLayerRepresentable(playback: tab.playback)
                 PlayerOverlay(playback: tab.playback)
             }
         }
@@ -94,14 +126,12 @@ private struct FullScreenPreviewView: View {
         .overlay(alignment: .bottom) {
             if controlsVisible, let item {
                 controls(item)
-                    .transition(.opacity)
             }
         }
         .environment(\.colorScheme, .dark)
         .onContinuousHover { phase in
             if case .active = phase { showControls() }
         }
-        .onAppear(perform: showControls)
         .task(id: activity) { await hideControlsLater() }
         .task(id: item?.id) { await loadDetails() }
         .onChange(of: item?.id) {
@@ -116,6 +146,9 @@ private struct FullScreenPreviewView: View {
                     .font(.headline)
                     .lineLimit(1)
                 Spacer(minLength: 8)
+                if preview.screens.count > 1 {
+                    displayMenu
+                }
                 if !item.isPlayable {
                     FullScreenButton(isFullScreen: true, action: onClose)
                 }
@@ -137,28 +170,44 @@ private struct FullScreenPreviewView: View {
         .padding(.bottom, 32)
     }
 
+    private var displayMenu: some View {
+        Menu {
+            ForEach(preview.screens, id: \.self) { screen in
+                Toggle(screen.localizedName, isOn: Binding(
+                    get: { screen == preview.screen },
+                    set: { _ in preview.choose(screen) }
+                ))
+            }
+        } label: {
+            Image(systemName: "display")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Show on another display")
+    }
+
     private func showControls() {
-        withAnimation(.easeOut(duration: 0.15)) { controlsVisible = true }
+        controlsVisible = true
         activity &+= 1
     }
 
     private func hideControlsLater() async {
         try? await Task.sleep(for: Self.controlsTimeout)
         guard !Task.isCancelled else { return }
-        withAnimation(.easeIn(duration: 0.3)) { controlsVisible = false }
+        controlsVisible = false
         NSCursor.setHiddenUntilMouseMoves(true)
     }
 
     private func loadDetails() async {
         guard let item else { return }
-        // The inspector's image shows at once, so the zoom never starts on black.
         picture = ThumbnailCache.shared.cached(item.url, modified: item.modified, size: InspectorPreview.posterSize)
         media = nil
         if item.isPlayable {
             media = await MediaInfoReader.read(item.url)
         } else {
-            let side = NSScreen.main.map { max($0.frame.width, $0.frame.height) } ?? 1800
-            ThumbnailCache.shared.request(item.url, modified: item.modified, size: side, scale: NSScreen.main?.backingScaleFactor ?? 2) { image in
+            let side = max(preview.screen.frame.width, preview.screen.frame.height)
+            ThumbnailCache.shared.request(item.url, modified: item.modified, size: side, scale: preview.screen.backingScaleFactor) { image in
                 if self.item?.id == item.id { picture = image }
             }
         }

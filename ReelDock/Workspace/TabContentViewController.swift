@@ -64,7 +64,11 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         if importHost != nil { refreshSubfolderOptions() }
 
         guard let folder = tab.folder else {
-            showMessage(EmptyTabView(app: app, controller: windowController))
+            if app.projectRootURL == nil || app.projects.isEmpty {
+                showMessage(EmptyTabView(app: app, controller: windowController))
+            } else {
+                showMessage(ProjectPickerView(app: app, controller: windowController))
+            }
             return
         }
         watcher = FolderWatcher(path: folder.canonicalPath) { [weak self] change in
@@ -298,6 +302,7 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
 
     private func handle(_ change: FolderWatcher.Change) {
         guard let folder = tab.folder else { return }
+        windowController?.refreshTabTags()
         if change.rootChanged, !FileManager.default.fileExists(atPath: folder.path) {
             windowController?.folderDidDisappear()
             return
@@ -400,8 +405,8 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         await windowController?.moveToTrash(urls)
     }
 
-    func tagMenu(for urls: [URL]) -> NSMenu? {
-        windowController?.tagMenu(for: urls)
+    func addTagItems(to menu: NSMenu, for urls: [URL]) {
+        windowController?.addTagItems(to: menu, for: urls)
     }
 }
 
@@ -420,13 +425,73 @@ private struct EmptyTabView: View {
                 Button("Choose Projects Folder…") { app.chooseProjectRoot(from: controller) }
                     .controlSize(.large)
             } else {
-                Text("Choose a project from the sidebar, or open any folder.")
-                    .foregroundStyle(.secondary)
                 Button("Open Folder…") { controller?.openFolder(nil) }
                     .controlSize(.large)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The new-tab page: every project, one click away.
+private struct ProjectPickerView: View {
+    let app: AppModel
+    weak var controller: WorkspaceWindowController?
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(app.projects) { project in
+                        ProjectPickerRow(project: project) {
+                            app.open(project.url, from: controller)
+                        }
+                    }
+                }
+                .frame(maxWidth: 560)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .frame(maxWidth: .infinity)
+            }
+            .ignoresSafeArea(.container, edges: .top)
+            Button("Open Folder…") { controller?.openFolder(nil) }
+                .controlSize(.large)
+                .padding(.bottom, 16)
+        }
+    }
+}
+
+private struct ProjectPickerRow: View {
+    let project: ProjectEntry
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                LeadingTagDots(tags: project.tags)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(project.title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if let date = project.displayDate {
+                        Text(date)
+                            .font(.caption)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(isHovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear), in: RoundedRectangle(cornerRadius: 10))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help(project.folderName)
     }
 }
 
