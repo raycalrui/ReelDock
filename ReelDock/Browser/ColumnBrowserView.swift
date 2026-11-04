@@ -278,6 +278,14 @@ final class ColumnBrowserView: NSView {
         }
     }
 
+    /// Selects a file just written next to the current selection.
+    func selectNewFile(_ url: URL) {
+        guard let column = selectionColumn else { return }
+        Task {
+            await column.load { column.select(url: url) }
+        }
+    }
+
     func renameDidFinish(in column: BrowserColumnView, newURL: URL) {
         Task {
             await column.load { column.select(url: newURL) }

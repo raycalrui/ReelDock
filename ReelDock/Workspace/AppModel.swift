@@ -9,11 +9,19 @@ final class TabModel {
     var selection: [FolderItem] = [] {
         didSet {
             playback.follow(selection)
+            // Unsaved edits don't follow another selection, and the file itself hasn't changed.
+            if let imageEdit, selection.count != 1 || selection[0].url.path != imageEdit.url.path {
+                self.imageEdit = nil
+            }
             onSelectionChange?()
         }
     }
     @ObservationIgnored var onSelectionChange: (() -> Void)?
     let playback = PlaybackController()
+    var imageEdit: ImageEditSession?
+    /// By file path, so marks survive selecting something else for a moment.
+    var trimMarks: [String: TrimMarks] = [:]
+    var videoExport: VideoTrimExport?
     /// Limits the sidebar's project list to one tag.
     var projectTagFilter: String?
     var isImportPanelVisible = false
@@ -34,6 +42,11 @@ final class AppModel {
     private(set) var projectRootIsMissing = false
     /// Changes when tags are written, for views that read tags directly.
     private(set) var tagsGeneration = 0
+    @ObservationIgnored private var tagsOnThisMac: [FinderTag] = []
+    @ObservationIgnored let partFiles: PartFileRegistry
+    /// Files being trimmed, which can't move or change until that's done.
+    @ObservationIgnored var trimSources: Set<String> = []
+    @ObservationIgnored private var tagRefreshObserver: (any NSObjectProtocol)?
 
     let cards: CardMonitor
     let queue: ImportQueue
@@ -57,6 +70,7 @@ final class AppModel {
         let ledger = ImportLedger(fileURL: store.directory.appendingPathComponent("import-ledger.jsonl"))
         let registry = PartFileRegistry(fileURL: store.directory.appendingPathComponent("in-progress.json"))
         registry.removeLeftovers()
+        partFiles = registry
 
         var currentRoots: (() -> (project: URL?, media: URL?))?
         let monitor = CardMonitor(ledger: ledger) { currentRoots?() ?? (nil, nil) }
@@ -68,6 +82,11 @@ final class AppModel {
         monitor.onCardsChanged = { [weak self] in self?.cardsDidChange($0) }
         watchProjectRoot()
         monitor.start()
+
+        refreshTagsOnThisMac()
+        tagRefreshObserver = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshTagsOnThisMac() }
+        }
     }
 
     var projectRootURL: URL? {
@@ -147,9 +166,21 @@ final class AppModel {
     func tagChoices(forCurrentTags current: [[FinderTag]]) -> [TagChoice] {
         FinderTags.choices(
             standard: FinderTags.standardTags(labels: NSWorkspace.shared.fileLabels),
-            seen: projects.flatMap(\.tags),
+            seen: projects.flatMap(\.tags) + tagsOnThisMac,
             current: current
         )
+    }
+
+    /// Finder can add tags while the app is in the background, so this runs each time the app comes forward.
+    private func refreshTagsOnThisMac() {
+        Task {
+            tagsOnThisMac = await Task.detached(priority: .utility) { FinderTags.onThisMac() }.value
+        }
+    }
+
+    /// Spotlight takes a moment to index a new tag, so it's offered right away from here.
+    func rememberTag(_ name: String) {
+        tagsOnThisMac.append(FinderTag(name: name, colorIndex: 0))
     }
 
     func tagsDidChange() {
@@ -432,6 +463,7 @@ final class AppModel {
     /// Moving a folder that's being copied into, or out of, would strand the rest of that copy.
     func isBusy(_ url: URL) -> Bool {
         queue.isImporting(into: url) || transfers.isBusy(with: url)
+            || trimSources.contains { $0.relocated(from: url.path, to: "") != nil }
     }
 
     /// An open clip would keep playing from the old path, and then fail to reload.

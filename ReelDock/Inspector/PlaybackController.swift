@@ -94,6 +94,17 @@ final class PlaybackController {
         unload()
     }
 
+    /// Picks up a change to the file itself, staying at the same place. Does nothing if it isn't open.
+    func reloadFile() {
+        guard isLoaded else { return }
+        let position = time
+        let previousRate = rate
+        unload()
+        prepare()
+        if position > 0 { seek(to: position) }
+        if previousRate != 0 { start(rate: previousRate) }
+    }
+
     func unload() {
         reverse?.stop()
         reverse = nil
@@ -222,6 +233,9 @@ final class PlaybackController {
         static let k: UInt16 = 40
         static let l: UInt16 = 37
         static let space: UInt16 = 49
+        static let i: UInt16 = 34
+        static let o: UInt16 = 31
+        static let x: UInt16 = 7
     }
 
     // MARK: Internals

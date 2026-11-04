@@ -16,9 +16,73 @@ extension NSPasteboard {
     }
 }
 
+/// Opens what the pointer rests on during a drag, following the system's spring-loading setting.
+final class SpringLoad {
+    private var target: AnyHashable?
+    private var task: Task<Void, Never>?
+
+    private static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: "com.apple.springing.enabled") as? Bool ?? true
+    }
+
+    private static var delay: Duration {
+        .seconds(UserDefaults.standard.object(forKey: "com.apple.springing.delay") as? Double ?? 0.5)
+    }
+
+    func isHovering(over candidate: AnyHashable) -> Bool {
+        target == candidate
+    }
+
+    func hover(over newTarget: AnyHashable, open: @escaping () -> Void) {
+        guard newTarget != target, Self.isEnabled else { return }
+        cancel()
+        target = newTarget
+        task = Task { [weak self] in
+            try? await Task.sleep(for: Self.delay)
+            guard !Task.isCancelled else { return }
+            self?.target = nil
+            open()
+        }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        target = nil
+    }
+}
+
 /// A table that reports focus and handles Finder's column-view keys.
 final class BrowserTableView: NSTableView {
+    /// Blank space past the last row, so a full list still has somewhere to right-click.
+    private static let bottomPadding: CGFloat = 44
+
     weak var column: BrowserColumnView?
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let height = CGFloat(numberOfRows) * rowHeight + Self.bottomPadding
+        super.setFrameSize(NSSize(width: newSize.width, height: max(newSize.height, height)))
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        column?.updateSpringLoad(sender)
+        return super.draggingEntered(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        column?.updateSpringLoad(sender)
+        return super.draggingUpdated(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        column?.cancelSpringLoad()
+        super.draggingExited(sender)
+    }
+
+    // No super call: AppKit's views don't implement this, so calling it would crash.
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        column?.cancelSpringLoad()
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
@@ -152,6 +216,9 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         case filesOnly
     }
 
+    /// A spring-loaded folder can replace the column a drag started in, which has to outlive the drag.
+    private static var draggedFrom: BrowserColumnView?
+
     let folderURL: URL
     let canonicalPath: String
     let filter: Filter
@@ -172,6 +239,7 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     private var needsReloadAfterRename = false
     private let handle = ColumnResizeHandle()
     private let statusLabel = NSTextField(labelWithString: "")
+    private let springLoad = SpringLoad()
 
     init(folderURL: URL, filter: Filter) {
         self.folderURL = folderURL
@@ -196,8 +264,9 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         tableView.column = self
         tableView.target = self
         tableView.doubleAction = #selector(handleDoubleClick)
-        // Dragging out of the app can't move files. Generic is what the Command key asks for.
-        tableView.setDraggingSourceOperationMask([.copy, .link], forLocal: false)
+        // Dragging out of the app can't move files, and Finder would make an alias if a link were allowed.
+        // Generic is what the Command key asks for.
+        tableView.setDraggingSourceOperationMask(.copy, forLocal: false)
         tableView.setDraggingSourceOperationMask(FileOperations.isOnCameraCard(folderURL) ? .copy : [.copy, .move, .generic], forLocal: true)
         tableView.registerForDraggedTypes([.fileURL])
         // The "Empty" label sits above the table, and would otherwise block a drop on it.
@@ -419,7 +488,37 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         items[row].url as NSURL
     }
 
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forRowIndexes rowIndexes: IndexSet) {
+        Self.draggedFrom = self
+    }
+
+    func tableView(_ tableView: NSTableView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        // Later, since releasing a replaced column here could free the table while it's still ending the drag.
+        Task { Self.draggedFrom = nil }
+    }
+
     // MARK: Drop
+
+    /// Resting on a folder selects it, which opens it in the next column, so a drop can reach any depth.
+    /// A folder the drag can't go into won't open, but the one its items are already in does, for its subfolders.
+    func updateSpringLoad(_ info: any NSDraggingInfo) {
+        let row = tableView.row(at: tableView.convert(info.draggingLocation, from: nil))
+        guard row >= 0, row < items.count, items[row].isFolder, tableView.selectedRowIndexes != IndexSet(integer: row) else {
+            springLoad.cancel()
+            return
+        }
+        let url = items[row].url
+        guard !springLoad.isHovering(over: url) else { return }
+        guard (try? FileTransfer.validate(sources: info.draggingPasteboard.fileURLs, destination: url, kind: .copy)) != nil else {
+            springLoad.cancel()
+            return
+        }
+        springLoad.hover(over: url) { [weak self] in self?.select(url: url) }
+    }
+
+    func cancelSpringLoad() {
+        springLoad.cancel()
+    }
 
     /// A folder row takes the drop. Anywhere else in the column means this column's folder.
     private func dropTarget(_ info: any NSDraggingInfo) -> (row: Int, folder: URL) {

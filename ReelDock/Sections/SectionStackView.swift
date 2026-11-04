@@ -16,6 +16,8 @@ final class SectionHeaderView: NSView {
     private let revealButton = NSButton()
     private let separator = NSBox()
     private var canToggle = true
+    private var opensOnHover = false
+    private let springLoad = SpringLoad()
     private var isDropTarget = false {
         didSet {
             if isDropTarget != oldValue { needsDisplay = true }
@@ -106,6 +108,7 @@ final class SectionHeaderView: NSView {
         let isEmpty = count == 0
         countLabel.stringValue = isEmpty ? "Empty" : count.map(String.init) ?? "—"
         canToggle = !isEmpty
+        opensOnHover = !isEmpty && !expanded
         maximizeButton.isHidden = isEmpty
         let symbol = expanded ? "chevron.down" : "chevron.right"
         disclosure.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
@@ -141,16 +144,29 @@ final class SectionHeaderView: NSView {
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
         isDropTarget = false
+        springLoad.cancel()
+    }
+
+    override func draggingEnded(_ sender: any NSDraggingInfo) {
+        isDropTarget = false
+        springLoad.cancel()
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
         isDropTarget = false
+        springLoad.cancel()
         return acceptDrop?(sender) ?? false
     }
 
     private func updateDrop(_ info: any NSDraggingInfo) -> NSDragOperation {
         let operation = dropOperation?(info) ?? []
         isDropTarget = !operation.isEmpty
+        // Resting on a collapsed section opens it, so its folders can be reached.
+        if opensOnHover {
+            springLoad.hover(over: "header") { [weak self] in self?.onToggle?() }
+        } else {
+            springLoad.cancel()
+        }
         return operation
     }
 

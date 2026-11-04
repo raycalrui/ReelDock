@@ -200,13 +200,26 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         pane.header.onReveal = {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: section.url.path)
         }
-        // The way to paste into a section that's empty, since an empty section doesn't open.
-        pane.header.makeMenu = { [weak self] in
-            guard let self, self.canPasteFiles, !FileOperations.isOnCameraCard(section.url) else { return nil }
+        // Always in view, so it works when the list is full. It's also the way into a section that's empty, since an empty section doesn't open.
+        pane.header.makeMenu = { [weak self, weak pane] in
+            guard let self, !FileOperations.isOnCameraCard(section.url) else { return nil }
             let menu = NSMenu()
-            menu.addItem(.closure("Paste") { [weak self] in self?.transferPastedFiles(.copy, into: section.url) })
-            menu.addItem(.closure("Move Here") { [weak self] in self?.transferPastedFiles(.move, into: section.url) })
-            return menu
+            if !section.isFilesOnly {
+                menu.addItem(.closure("New Folder") { [weak self, weak pane] in
+                    guard let pane else { return }
+                    // Naming it in place needs a column on screen.
+                    if pane.isExpanded, pane.count != 0, let column = pane.browser.columns.first {
+                        pane.browser.createFolder(in: column)
+                    } else {
+                        _ = self?.createFolder(in: section.url)
+                    }
+                })
+            }
+            if self.canPasteFiles {
+                menu.addItem(.closure("Paste") { [weak self] in self?.transferPastedFiles(.copy, into: section.url) })
+                menu.addItem(.closure("Move Here") { [weak self] in self?.transferPastedFiles(.move, into: section.url) })
+            }
+            return menu.items.isEmpty ? nil : menu
         }
         pane.header.dropOperation = { [weak self] info in
             self?.dropOperation(info, into: section.url) ?? []

@@ -90,6 +90,7 @@ private struct FullScreenPreviewView: View {
     @State private var media: MediaInfo?
     @State private var controlsVisible = true
     @State private var activity = 0
+    @State private var isOverControls = false
 
     init(tab: TabModel, preview: FullScreenPreview, onClose: @escaping () -> Void) {
         self.tab = tab
@@ -104,6 +105,10 @@ private struct FullScreenPreviewView: View {
 
     private var item: FolderItem? {
         tab.selection.count == 1 ? tab.selection[0] : nil
+    }
+
+    private var hasMarks: Bool {
+        item.flatMap { tab.trimMarks[$0.id] }?.isEmpty == false
     }
 
     var body: some View {
@@ -126,6 +131,8 @@ private struct FullScreenPreviewView: View {
         .overlay(alignment: .bottom) {
             if controlsVisible, let item {
                 controls(item)
+                    .onHover { isOverControls = $0 }
+                    .onDisappear { isOverControls = false }
             }
         }
         .environment(\.colorScheme, .dark)
@@ -133,6 +140,9 @@ private struct FullScreenPreviewView: View {
             if case .active = phase { showControls() }
         }
         .task(id: activity) { await hideControlsLater() }
+        // Starts the wait over when the pointer leaves or the marks clear, and shows the marks as they're set.
+        .onChange(of: isOverControls) { showControls() }
+        .onChange(of: hasMarks) { showControls() }
         .task(id: item?.id) { await loadDetails() }
         .onChange(of: item?.id) {
             if item?.canPreviewFullScreen != true { onClose() }
@@ -159,6 +169,7 @@ private struct FullScreenPreviewView: View {
                     duration: media?.duration ?? 0,
                     frameRate: media?.frameRate,
                     isFullScreen: true,
+                    marks: tab.trimMarks[item.id],
                     onFullScreen: onClose
                 )
             }
@@ -194,7 +205,7 @@ private struct FullScreenPreviewView: View {
 
     private func hideControlsLater() async {
         try? await Task.sleep(for: Self.controlsTimeout)
-        guard !Task.isCancelled else { return }
+        guard !Task.isCancelled, !isOverControls, !hasMarks else { return }
         controlsVisible = false
         NSCursor.setHiddenUntilMouseMoves(true)
     }

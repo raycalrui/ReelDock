@@ -282,6 +282,19 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
+        case #selector(rotateLeft(_:)):
+            return selectedVideo != nil || (tab.selection.count == 1 && Self.canEdit(tab.selection[0]) && tab.imageEdit?.canEdit != false)
+        case #selector(cropImage(_:)):
+            return tab.selection.count == 1 && Self.canEdit(tab.selection[0]) && tab.imageEdit?.canEdit != false
+        case #selector(saveEdit(_:)), #selector(saveEditCopy(_:)):
+            if let selectedVideo {
+                return tab.videoExport == nil && tab.trimMarks[selectedVideo.id]?.isEmpty == false
+            }
+            return tab.imageEdit?.isEdited == true && tab.imageEdit?.canEdit == true
+        case #selector(markIn(_:)), #selector(markOut(_:)):
+            return selectedVideo != nil
+        case #selector(clearMarks(_:)):
+            return selectedVideo.map { tab.trimMarks[$0.id]?.isEmpty == false } ?? false
         case #selector(showSections(_:)):
             menuItem.state = tab.mode == .sections ? .on : .off
             return tab.folder != nil
@@ -709,6 +722,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     }
 
     func setTag(_ name: String, enabled: Bool, on urls: [URL]) {
+        app.rememberTag(name)
         applyTagNames(urls.map { url in
             (url, FinderTags.names(FinderTags.read(url).map(\.name), setting: name, enabled: enabled))
         })
@@ -874,7 +888,15 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
         if event.type == .keyDown {
             switch event.keyCode {
+            case 36, 76: // Return and Enter finish a crop.
+                guard !inFullScreen, let session = tab.imageEdit, session.crop != nil else { break }
+                if !event.isARepeat { session.applyCrop() }
+                return true
             case 53: // Escape
+                if !inFullScreen, let session = tab.imageEdit, session.crop != nil {
+                    session.crop = nil
+                    return true
+                }
                 // The preview can be on another display, with this window still key.
                 if fullScreenPreview != nil {
                     toggleFullScreenPreview()
@@ -899,6 +921,22 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
             }
         }
 
+        // I, O, and X stay available for type-select when the selection can't be trimmed.
+        if event.type == .keyDown, selectedVideo != nil, tab.videoExport?.url.path != selectedVideo?.url.path {
+            if event.keyCode == PlaybackController.KeyCode.i {
+                markTrimIn()
+                return true
+            }
+            if event.keyCode == PlaybackController.KeyCode.o {
+                markTrimOut()
+                return true
+            }
+            if event.keyCode == PlaybackController.KeyCode.x, let selectedVideo, tab.trimMarks[selectedVideo.id] != nil {
+                clearTrimMarks()
+                return true
+            }
+        }
+
         guard event.keyCode == PlaybackController.KeyCode.space else {
             return tab.playback.handleKey(code: event.keyCode, isDown: event.type == .keyDown, isRepeat: event.type == .keyDown && event.isARepeat)
         }
@@ -913,6 +951,250 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
             }
         }
         return true
+    }
+
+    // MARK: Image editing
+
+    static func canEdit(_ item: FolderItem) -> Bool {
+        !item.isFolder && ImageEditor.canEdit(item.contentType) && !FileOperations.isOnCameraCard(item.url)
+    }
+
+    /// The session for the selected image, started on the first edit.
+    private func imageEditSession() -> ImageEditSession? {
+        if let session = tab.imageEdit { return session }
+        guard tab.selection.count == 1, Self.canEdit(tab.selection[0]) else { return nil }
+        if inspectorItem?.isCollapsed == true {
+            inspectorStaysHidden = false
+            setInspectorCollapsed(false)
+        }
+        let session = ImageEditSession(url: tab.selection[0].url)
+        session.onError = { [weak self] in self?.showFileError("Can't edit this image", $0) }
+        tab.imageEdit = session
+        return session
+    }
+
+    func rotateImage(clockwise: Bool) {
+        imageEditSession()?.rotate(clockwise: clockwise)
+    }
+
+    func beginImageCrop() {
+        imageEditSession()?.beginCrop()
+    }
+
+    func discardImageEdit() {
+        tab.imageEdit = nil
+    }
+
+    func saveImageEdit(asCopy: Bool) {
+        guard let session = tab.imageEdit, session.isEdited, session.canEdit, let image = session.image else { return }
+        let url = session.url
+        let title = "Can't save the image"
+        guard !app.isBusy(url) else {
+            showFileError(title, FileOperationError.importing)
+            return
+        }
+        session.setWorking(true)
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { () -> (copy: URL?, replaced: FileOperations.TrashedItem?) in
+                    if asCopy { return (try ImageEditor.saveCopy(image, of: url), nil) }
+                    return (nil, try ImageEditor.replace(url, with: image, trash: Self.trashForEdit))
+                }
+            }.value
+            session.setWorking(false)
+            switch result {
+            case let .success(saved):
+                if tab.imageEdit === session { tab.imageEdit = nil }
+                if let copy = saved.copy {
+                    window?.undoManager?.registerUndo(withTarget: self) { target in
+                        target.moveToTrashNow([copy])
+                    }
+                    window?.undoManager?.setActionName("Save Copy")
+                    content.fileOperationBrowser?.selectNewFile(copy)
+                }
+                if let replaced = saved.replaced {
+                    registerFileVersionUndo(at: url, other: replaced)
+                }
+                content.reloadFolderContents()
+            case let .failure(error):
+                showFileError(title, error)
+            }
+        }
+    }
+
+    private nonisolated static func trashForEdit(_ url: URL) throws -> FileOperations.TrashedItem {
+        let result = FileOperations.moveToTrash([url])
+        guard let item = result.moved.first else { throw result.error ?? ImageEditorError.cantWrite }
+        return item
+    }
+
+    private func registerFileVersionUndo(at url: URL, other: FileOperations.TrashedItem) {
+        window?.undoManager?.registerUndo(withTarget: self) { target in
+            target.swapFileVersion(at: url, with: other)
+        }
+        window?.undoManager?.setActionName("Save")
+    }
+
+    /// Undo and redo trade the version on disk for the one in the Trash, so neither is lost.
+    private func swapFileVersion(at url: URL, with other: FileOperations.TrashedItem) {
+        let title = "Can't change the file back"
+        guard !app.isBusy(url) else {
+            showFileError(title, FileOperationError.importing)
+            return
+        }
+        do {
+            app.releasePlayback(under: url)
+            let current = try Self.trashForEdit(url)
+            do {
+                try FileOperations.restore(other)
+            } catch {
+                try? FileOperations.restore(current)
+                throw error
+            }
+            tab.imageEdit = nil
+            tab.trimMarks[url.path] = nil
+            registerFileVersionUndo(at: url, other: current)
+            content.reloadFolderContents()
+        } catch {
+            showFileError(title, error)
+        }
+    }
+
+    // MARK: Video editing
+
+    static func canEditVideo(_ item: FolderItem) -> Bool {
+        !item.isFolder && item.isVideo && VideoEditor.canEdit(item.contentType) && !FileOperations.isOnCameraCard(item.url)
+    }
+
+    private var selectedVideo: FolderItem? {
+        tab.selection.count == 1 && Self.canEditVideo(tab.selection[0]) ? tab.selection[0] : nil
+    }
+
+    func rotateVideo(clockwise: Bool) {
+        guard let selectedVideo else { return }
+        rotateVideo(at: selectedVideo.url, clockwise: clockwise)
+    }
+
+    /// Changes the file's header directly, so undo is simply a turn the other way.
+    private func rotateVideo(at url: URL, clockwise: Bool) {
+        let title = "Can't rotate this video"
+        guard !app.isBusy(url) else {
+            showFileError(title, FileOperationError.importing)
+            return
+        }
+        do {
+            try VideoEditor.rotate(url, clockwise: clockwise)
+        } catch {
+            showFileError(title, error)
+            return
+        }
+        window?.undoManager?.registerUndo(withTarget: self) { target in
+            target.rotateVideo(at: url, clockwise: !clockwise)
+        }
+        window?.undoManager?.setActionName("Rotate")
+        app.controllers.filter { $0.tab.playback.url?.path == url.path }.forEach { $0.tab.playback.reloadFile() }
+        content.reloadFolderContents()
+    }
+
+    /// The first frame is shown right away, so a mark can be set before anything has played.
+    func markTrimIn() {
+        guard let selectedVideo else { return }
+        tab.playback.prepare()
+        tab.trimMarks[selectedVideo.id, default: TrimMarks()].markIn(tab.playback.time)
+    }
+
+    func markTrimOut() {
+        guard let selectedVideo else { return }
+        tab.playback.prepare()
+        tab.trimMarks[selectedVideo.id, default: TrimMarks()].markOut(tab.playback.time)
+    }
+
+    func clearTrimMarks() {
+        guard let selectedVideo else { return }
+        tab.trimMarks[selectedVideo.id] = nil
+    }
+
+    func saveVideoTrim(asCopy: Bool) {
+        guard tab.videoExport == nil, let item = selectedVideo, let marks = tab.trimMarks[item.id], !marks.isEmpty else { return }
+        let url = item.url
+        let title = "Can't save the trimmed video"
+        guard !app.isBusy(url) else {
+            showFileError(title, FileOperationError.importing)
+            return
+        }
+        let export = VideoTrimExport(url: url)
+        tab.videoExport = export
+        app.trimSources.insert(url.path)
+        export.task = Task {
+            defer {
+                tab.videoExport = nil
+                app.trimSources.remove(url.path)
+            }
+            var partFolder: URL?
+            defer {
+                if let partFolder {
+                    try? FileManager.default.removeItem(at: partFolder)
+                    app.partFiles.remove(partFolder)
+                }
+            }
+            do {
+                let folder = try VideoEditor.makePartFolder(beside: url)
+                partFolder = folder
+                app.partFiles.add(folder)
+                let built = try await VideoEditor.exportTrim(of: url, marks: marks, into: folder) { [weak export] fraction in
+                    Task { @MainActor in export?.progress = fraction }
+                }
+                try Task.checkCancellation()
+                // Publishing is what releases the source, so nothing can be busy with it past this point.
+                app.trimSources.remove(url.path)
+                try finishTrim(built, of: url, asCopy: asCopy)
+            } catch {
+                if !Task.isCancelled { showFileError(title, error) }
+            }
+        }
+    }
+
+    private func finishTrim(_ built: URL, of url: URL, asCopy: Bool) throws {
+        if asCopy {
+            let copy = try VideoEditor.publishCopy(built, of: url)
+            window?.undoManager?.registerUndo(withTarget: self) { target in
+                target.moveToTrashNow([copy])
+            }
+            window?.undoManager?.setActionName("Save Copy")
+        } else {
+            let wasOpen = tab.playback.isLoaded
+            app.releasePlayback(under: url)
+            let replaced = try VideoEditor.publishReplacing(url, with: built, trash: Self.trashForEdit)
+            tab.trimMarks[url.path] = nil
+            registerFileVersionUndo(at: url, other: replaced)
+            if wasOpen, tab.playback.url?.path == url.path { tab.playback.prepare() }
+        }
+        content.reloadFolderContents()
+    }
+
+    // MARK: Editing commands
+
+    @objc func rotateLeft(_ sender: Any?) {
+        if selectedVideo != nil {
+            rotateVideo(clockwise: false)
+        } else {
+            rotateImage(clockwise: false)
+        }
+    }
+
+    @objc func cropImage(_ sender: Any?) { beginImageCrop() }
+    @objc func saveEdit(_ sender: Any?) { saveEdit(asCopy: false) }
+    @objc func saveEditCopy(_ sender: Any?) { saveEdit(asCopy: true) }
+    @objc func markIn(_ sender: Any?) { markTrimIn() }
+    @objc func markOut(_ sender: Any?) { markTrimOut() }
+    @objc func clearMarks(_ sender: Any?) { clearTrimMarks() }
+
+    private func saveEdit(asCopy: Bool) {
+        if selectedVideo != nil {
+            saveVideoTrim(asCopy: asCopy)
+        } else {
+            saveImageEdit(asCopy: asCopy)
+        }
     }
 
     // MARK: Full-screen preview
@@ -1030,7 +1312,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         case .reveal:
             let item = NSToolbarItem(itemIdentifier: identifier)
             item.label = "Reveal in Finder"
-            item.toolTip = "Reveal in Finder"
+            item.toolTip = "Reveal in Finder (⌘F)"
             item.image = NSImage(systemSymbolName: "arrow.up.forward.square", accessibilityDescription: "Reveal in Finder")
             item.target = self
             item.action = #selector(revealInFinder(_:))

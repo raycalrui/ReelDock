@@ -35,6 +35,8 @@ Finder makes this slow in two ways:
 - Open any ordinary folder the same way, and save favorites.
 - Read and write real Finder tags, so they stay in sync with Finder.
 - Create a project from the template folder, named `YYYYMMDD_name`.
+- Trim MP4 and MOV clips with in and out points, and rotate them instantly, without re-encoding.
+- Rotate and crop JPEG, PNG, HEIC, and TIFF images. Saving keeps the original in the Trash, or writes a copy beside it.
 
 **Card import**
 

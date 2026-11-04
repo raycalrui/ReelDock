@@ -149,3 +149,31 @@ An empty inspector only takes width from the browser, so it hides when nothing i
 ## Dragging uses Finder's rules, and paste's machinery
 
 A drag within the app moves on one volume and copies across volumes, with Option and Command overriding that, because that's what the hands already expect. It runs through the same transfer queue as paste, so verification, naming, undo, and the card rules don't have a second implementation. A drop on a section header exists because a collapsed or empty section has no column to drop on.
+
+## Finder's tags are gathered, not read from a list
+
+macOS has no public API for the tags Finder lists, and this system has no readable file holding them. More Tags combines the tags Spotlight finds on files with the names in Finder's preferences. The preference keys are undocumented, so they're read only, and missing ones just mean a shorter list. A private framework would be more complete, but could break with any macOS update.
+
+## Dragging out only allows copy
+
+Allowing link made Finder create an alias. Allowing move would let a drag take footage out of a project, or off to the Trash. Copy is the one thing every drag out should do.
+
+## Hovering opens folders by selecting them
+
+Selecting a folder already opens its column, so spring loading uses the same path and needs no second way of opening one. A drag's source column can be replaced by this, so it's kept alive until the drag ends.
+
+## Saving an edited image never destroys the original
+
+Preview changes a file in place, while this app never overwrites one. Save gives the same result on the file's path, but builds and checks the new version first and moves the original to the Trash, so undo can swap them back. Save Copy is there for when both are wanted. Only formats that hold one flat image can be edited, because writing a PSD or PDF back through ImageIO would lose its layers or pages, and RAW has no writer.
+
+## Rotating bakes the pixels
+
+Setting the orientation flag would avoid re-encoding a JPEG, but not everything that reads these files honors it, and crop has to re-encode anyway. Saved edits are upright with the flag cleared.
+
+## Video edits never re-encode
+
+Trimming is a passthrough export that copies the marked samples and uses an edit list to start on the exact frame, so it keeps the codec and audio as they are, including Sony's LPCM in MP4. It takes a verified new file, so Save follows the same path as images: original to the Trash, new version in its place.
+
+## Rotating a video changes the file in place
+
+Rotation only needs a different display matrix in each video track's header. Patching those few bytes is instant at any file size, leaves the media untouched, and is undone by turning back, so a copy would only add a wait and fill the Trash. This is the one edit that writes to an existing file, and it never runs on a card or while the file is busy.

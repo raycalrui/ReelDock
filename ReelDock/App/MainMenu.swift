@@ -7,6 +7,7 @@ enum MainMenu {
         menu.addItem(submenu("File", fileItems()))
         menu.addItem(submenu("Edit", editItems()))
         menu.addItem(submenu("View", viewItems()))
+        menu.addItem(submenu("Tools", toolItems()))
         let window = submenu("Window", windowItems())
         menu.addItem(window)
         NSApp.windowsMenu = window.submenu
@@ -60,7 +61,7 @@ enum MainMenu {
             item("Move to Trash", #selector(WorkspaceWindowController.moveSelectionToTrash(_:)), "\u{8}"),
             .separator(),
             item("Add Folder to Favorites", #selector(WorkspaceWindowController.toggleFavorite(_:)), "d"),
-            item("Reveal in Finder", #selector(WorkspaceWindowController.revealInFinder(_:)), "r", [.command, .shift]),
+            item("Reveal in Finder", #selector(WorkspaceWindowController.revealInFinder(_:)), "f"),
             .separator(),
             item("Close Tab", #selector(NSWindow.performClose(_:)), "w"),
         ]
@@ -90,6 +91,20 @@ enum MainMenu {
             item("Toggle Inspector", #selector(NSSplitViewController.toggleInspector(_:)), "i", [.command, .option]),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
+        ]
+    }
+
+    private static func toolItems() -> [NSMenuItem] {
+        [
+            item("Rotate Left", #selector(WorkspaceWindowController.rotateLeft(_:)), "l"),
+            item("Crop", #selector(WorkspaceWindowController.cropImage(_:)), "k"),
+            .separator(),
+            item("Mark In", #selector(WorkspaceWindowController.markIn(_:))),
+            item("Mark Out", #selector(WorkspaceWindowController.markOut(_:))),
+            item("Clear Marks", #selector(WorkspaceWindowController.clearMarks(_:))),
+            .separator(),
+            item("Save", #selector(WorkspaceWindowController.saveEdit(_:)), "s"),
+            item("Save Copy", #selector(WorkspaceWindowController.saveEditCopy(_:)), "s", [.command, .shift]),
         ]
     }
 

@@ -23,6 +23,7 @@ nonisolated struct FolderItem: Identifiable, Hashable, Sendable {
     var id: String { url.path }
 
     var isVideo: Bool { contentType?.conforms(to: .movie) ?? false }
+    var isAudio: Bool { contentType?.conforms(to: .audio) ?? false }
     var isPlayable: Bool { !isFolder && contentType?.conforms(to: .audiovisualContent) == true }
     var canPreviewFullScreen: Bool { isVideo || contentType?.conforms(to: .image) == true }
     var hasVisualThumbnail: Bool {

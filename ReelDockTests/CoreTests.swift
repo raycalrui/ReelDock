@@ -1,6 +1,9 @@
+import AVFoundation
 import AppKit
 import Foundation
+import ImageIO
 import Testing
+import UniformTypeIdentifiers
 @testable import ReelDock
 
 private struct Fixture {
@@ -612,6 +615,26 @@ private struct Fixture {
         #expect(choices.first { $0.tag.name == "Client" }?.state == .some)
         #expect(choices.first { $0.tag.name == "Red" }?.state == TagChoice.State.none)
     }
+
+    @Test func aTagSeenWithAndWithoutAColorKeepsTheColor() {
+        let choices = FinderTags.choices(
+            standard: [],
+            seen: [FinderTag(name: "Music", colorIndex: 0), FinderTag(name: "Music", colorIndex: 4), FinderTag(name: "Work", colorIndex: 0)],
+            current: []
+        )
+        #expect(choices.map(\.tag.name) == ["Music", "Work"])
+        #expect(choices.first?.tag.colorIndex == 4)
+    }
+
+    @Test func finderPreferencesNameItsTags() {
+        let preferences: [String: Any] = [
+            "FavoriteTagNames": ["", "Red", "Music"],
+            "ViewSettingsDictionary": ["Work_Tag_ViewSettings": [String: Any](), "Work_Tag_ViewStyle": "clmv", "ListViewSettings": [String: Any]()],
+            "ShowRecentTags": true,
+        ]
+        #expect(Set(FinderTags.names(inFinderPreferences: preferences)) == ["Red", "Music", "Work"])
+        #expect(FinderTags.names(inFinderPreferences: [:]).isEmpty)
+    }
 }
 
 @Suite struct FileTransferTests {
@@ -783,3 +806,445 @@ private struct Fixture {
         queue.cancelAll()
     }
 }
+
+@Suite struct ImageEditorTests {
+    private func folder() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("ImageEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// A 3 by 2 image where every pixel differs, read back from the top left.
+    private func testImage() throws -> CGImage {
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        let context = try #require(CGContext(data: nil, width: 3, height: 2, bitsPerComponent: 8, bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        for x in 0..<3 {
+            for y in 0..<2 {
+                context.setFillColor(red: CGFloat(x) / 3, green: CGFloat(y) / 2, blue: 0.5, alpha: 1)
+                context.fill(CGRect(x: x, y: 1 - y, width: 1, height: 1))
+            }
+        }
+        return try #require(context.makeImage())
+    }
+
+    private func pixels(_ image: CGImage) throws -> [[UInt32]] {
+        let space = CGColorSpace(name: CGColorSpace.sRGB)!
+        var bytes = [UInt32](repeating: 0, count: image.width * image.height)
+        let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(data: buffer.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+            context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            return true
+        }
+        #expect(drawn)
+        return (0..<image.height).map { y in Array(bytes[(y * image.width)..<((y + 1) * image.width)]) }
+    }
+
+    private func write(_ image: CGImage, to url: URL, type: UTType = .png, properties: [CFString: Any] = [:]) throws {
+        let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, type.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+        #expect(CGImageDestinationFinalize(destination))
+    }
+
+    @Test func rotatingTurnsPixelsAndFourTurnsComeBack() throws {
+        let image = try testImage()
+        let original = try pixels(image)
+        let right = try ImageEditor.rotated(image, clockwise: true)
+        #expect((right.width, right.height) == (2, 3))
+        // Clockwise, the top left moves to the top right, and the bottom left to the top left.
+        #expect(try pixels(right)[0][1] == original[0][0])
+        #expect(try pixels(right)[0][0] == original[1][0])
+        #expect(try pixels(right)[2][1] == original[0][2])
+        let left = try ImageEditor.rotated(image, clockwise: false)
+        #expect(try pixels(left)[0][0] == original[0][2])
+        #expect(try pixels(left)[2][0] == original[0][0])
+        var turned = image
+        for _ in 0..<4 { turned = try ImageEditor.rotated(turned, clockwise: true) }
+        #expect(try pixels(turned) == original)
+    }
+
+    @Test func croppingMeasuresFromTheTopLeft() throws {
+        let image = try testImage()
+        let original = try pixels(image)
+        let cropped = try ImageEditor.cropped(image, to: CGRect(x: 1, y: 1, width: 2, height: 1))
+        #expect(try pixels(cropped) == [[original[1][1], original[1][2]]])
+    }
+
+    /// ImageIO's own upright thumbnail is the reference for every orientation.
+    @Test(arguments: 1...8) func loadingFollowsTheFilesOrientation(orientation: Int) throws {
+        let url = try folder().appendingPathComponent("image.png")
+        try write(testImage(), to: url, properties: [kCGImagePropertyOrientation: orientation])
+        let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
+        let reference = try #require(CGImageSourceCreateThumbnailAtIndex(source, 0, [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 3,
+        ] as CFDictionary))
+        #expect(try pixels(ImageEditor.load(url)) == pixels(reference))
+    }
+
+    @Test func onlyFlatFormatsCanBeEdited() {
+        #expect(ImageEditor.canEdit(.jpeg))
+        #expect(ImageEditor.canEdit(.png))
+        #expect(ImageEditor.canEdit(.heic))
+        #expect(ImageEditor.canEdit(.tiff))
+        #expect(!ImageEditor.canEdit(.pdf))
+        #expect(!ImageEditor.canEdit(UTType("com.adobe.photoshop-image")))
+        #expect(!ImageEditor.canEdit(UTType("com.sony.arw-raw-image")))
+        #expect(!ImageEditor.canEdit(.movie))
+        #expect(!ImageEditor.canEdit(nil))
+    }
+
+    @Test func aFileWithSeveralImagesIsRefused() throws {
+        let url = try folder().appendingPathComponent("several.tiff")
+        let destination = try #require(CGImageDestinationCreateWithURL(url as CFURL, UTType.tiff.identifier as CFString, 2, nil))
+        CGImageDestinationAddImage(destination, try testImage(), nil)
+        CGImageDestinationAddImage(destination, try testImage(), nil)
+        #expect(CGImageDestinationFinalize(destination))
+        #expect(throws: ImageEditorError.self) { try ImageEditor.load(url) }
+    }
+
+    @Test func aCopyLeavesTheOriginalAndNeverTakesAName() throws {
+        let directory = try folder()
+        let url = directory.appendingPathComponent("photo.jpg")
+        try write(testImage(), to: url, type: .jpeg)
+        let before = try Data(contentsOf: url)
+        let turned = try ImageEditor.rotated(ImageEditor.load(url), clockwise: true)
+
+        let first = try ImageEditor.saveCopy(turned, of: url)
+        let second = try ImageEditor.saveCopy(turned, of: url)
+        #expect(first.lastPathComponent == "photo edited.jpg")
+        #expect(second.lastPathComponent == "photo edited 2.jpg")
+        #expect(try Data(contentsOf: url) == before)
+        let saved = try ImageEditor.load(first)
+        #expect((saved.width, saved.height) == (2, 3))
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(Set(names) == ["photo.jpg", "photo edited.jpg", "photo edited 2.jpg"])
+    }
+
+    @Test func savingKeepsMetadataAndClearsTheOrientation() throws {
+        let directory = try folder()
+        let url = directory.appendingPathComponent("photo.jpg")
+        try write(testImage(), to: url, type: .jpeg, properties: [
+            kCGImagePropertyOrientation: 6,
+            kCGImagePropertyExifDictionary: [kCGImagePropertyExifLensModel: "Test Lens"],
+        ])
+        let upright = try ImageEditor.load(url)
+        #expect((upright.width, upright.height) == (2, 3))
+        let copy = try ImageEditor.saveCopy(upright, of: url)
+        let source = try #require(CGImageSourceCreateWithURL(copy as CFURL, nil))
+        let properties = try #require(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        #expect(properties[kCGImagePropertyOrientation] as? Int ?? 1 == 1)
+        #expect((properties[kCGImagePropertyExifDictionary] as? [CFString: Any])?[kCGImagePropertyExifLensModel] as? String == "Test Lens")
+        #expect(try ImageEditor.load(copy).width == 2)
+    }
+
+    @Test func replacingTrashesTheOriginalAndKeepsTags() throws {
+        let directory = try folder()
+        let holding = try folder()
+        let url = directory.appendingPathComponent("photo.png")
+        try write(testImage(), to: url)
+        try (url as NSURL).setResourceValue(["Blue"], forKey: .tagNamesKey)
+        let before = try Data(contentsOf: url)
+
+        let trashed = try ImageEditor.replace(url, with: ImageEditor.rotated(ImageEditor.load(url), clockwise: true)) { source in
+            let held = holding.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: held)
+            return FileOperations.TrashedItem(original: source, trashed: held)
+        }
+        #expect(try Data(contentsOf: trashed.trashed) == before)
+        #expect(try ImageEditor.load(url).width == 2)
+        #expect(FinderTags.read(url).map(\.name) == ["Blue"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["photo.png"])
+    }
+
+    @Test func aFailedTrashChangesNothing() throws {
+        let directory = try folder()
+        let url = directory.appendingPathComponent("photo.png")
+        try write(testImage(), to: url)
+        let before = try Data(contentsOf: url)
+        #expect(throws: ImageEditorError.self) {
+            _ = try ImageEditor.replace(url, with: try testImage()) { _ in throw ImageEditorError.cantWrite }
+        }
+        #expect(try Data(contentsOf: url) == before)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["photo.png"])
+    }
+
+    @Test func cropSelectionStaysInsideTheImage() {
+        let rect = CGRect(x: 0.2, y: 0.2, width: 0.4, height: 0.4)
+        func close(_ a: CGRect, _ b: CGRect) -> Bool {
+            abs(a.minX - b.minX) < 0.0001 && abs(a.minY - b.minY) < 0.0001 && abs(a.width - b.width) < 0.0001 && abs(a.height - b.height) < 0.0001
+        }
+        #expect(CropGeometry.grip(at: CGPoint(x: 0.2, y: 0.2), of: rect, toleranceX: 0.01, toleranceY: 0.01) == .topLeft)
+        #expect(CropGeometry.grip(at: CGPoint(x: 0.6, y: 0.4), of: rect, toleranceX: 0.01, toleranceY: 0.01) == .right)
+        #expect(CropGeometry.grip(at: CGPoint(x: 0.4, y: 0.4), of: rect, toleranceX: 0.01, toleranceY: 0.01) == .move)
+        #expect(CropGeometry.grip(at: CGPoint(x: 0.9, y: 0.9), of: rect, toleranceX: 0.01, toleranceY: 0.01) == .draw)
+        let moved = CropGeometry.dragged(rect, grip: .move, from: CGPoint(x: 0.4, y: 0.4), to: CGPoint(x: 5, y: -5))
+        #expect(close(moved, CGRect(x: 0.6, y: 0, width: 0.4, height: 0.4)))
+        let squeezed = CropGeometry.dragged(rect, grip: .right, from: .zero, to: CGPoint(x: 0, y: 0.5))
+        #expect(close(squeezed, CGRect(x: 0.2, y: 0.2, width: CropGeometry.minimumSize, height: 0.4)))
+        let drawn = CropGeometry.dragged(rect, grip: .draw, from: CGPoint(x: 0.8, y: 0.8), to: CGPoint(x: 0.5, y: 2))
+        #expect(close(drawn, CGRect(x: 0.5, y: 0.8, width: 0.3, height: 0.2)))
+        #expect(CropGeometry.pixelRect(CGRect(x: 0.5, y: 0.5, width: 0.5, height: 0.5), imageWidth: 3, imageHeight: 3).maxX <= 3)
+        #expect(CropGeometry.pixelRect(CGRect(x: 0, y: 0, width: 0.0001, height: 0.0001), imageWidth: 3, imageHeight: 3).width == 1)
+    }
+}
+
+@Suite struct VideoEditorTests {
+    private func folder() throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("VideoEditorTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// Each frame is a different shade, so a frame can be told from its neighbors. 32 by 16, at 10 frames a second.
+    private func makeClip(_ url: URL, type: AVFileType, frames: Int = 30, transform: CGAffineTransform = .identity) async throws {
+        let writer = try AVAssetWriter(outputURL: url, fileType: type)
+        let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+            AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: 32, AVVideoHeightKey: 16,
+        ])
+        input.transform = transform
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA, kCVPixelBufferWidthKey as String: 32, kCVPixelBufferHeightKey as String: 16,
+        ])
+        writer.add(input)
+        #expect(writer.startWriting())
+        writer.startSession(atSourceTime: .zero)
+        for index in 0..<frames {
+            while !input.isReadyForMoreMediaData { try await Task.sleep(for: .milliseconds(1)) }
+            var buffer: CVPixelBuffer?
+            CVPixelBufferCreate(nil, 32, 16, kCVPixelFormatType_32BGRA, nil, &buffer)
+            let pixels = try #require(buffer)
+            CVPixelBufferLockBaseAddress(pixels, [])
+            memset(CVPixelBufferGetBaseAddress(pixels), Int32(20 + index * 7), CVPixelBufferGetDataSize(pixels))
+            CVPixelBufferUnlockBaseAddress(pixels, [])
+            #expect(adaptor.append(pixels, withPresentationTime: CMTime(value: CMTimeValue(index), timescale: 10)))
+        }
+        input.markAsFinished()
+        await writer.finishWriting()
+        #expect(writer.status == .completed)
+    }
+
+    private func transform(of url: URL) async throws -> CGAffineTransform {
+        let track = try #require(try await AVURLAsset(url: url).loadTracks(withMediaType: .video).first)
+        return try await track.load(.preferredTransform)
+    }
+
+    private func shownSize(of url: URL) async throws -> CGSize {
+        let track = try #require(try await AVURLAsset(url: url).loadTracks(withMediaType: .video).first)
+        let size = try await track.load(.naturalSize).applying(try await track.load(.preferredTransform))
+        return CGSize(width: abs(size.width), height: abs(size.height))
+    }
+
+    private func brightness(of url: URL, at seconds: Double) async throws -> Int {
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true]))
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        let image = try await generator.image(at: CMTime(seconds: seconds, preferredTimescale: 600)).image
+        let context = try #require(CGContext(data: nil, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+        return Int(context.data!.assumingMemoryBound(to: UInt8.self).pointee)
+    }
+
+    @Test func marksClearWhatTheyPass() {
+        var marks = TrimMarks()
+        #expect(marks.isEmpty)
+        marks.markIn(5)
+        marks.markOut(8)
+        #expect(marks.range(duration: 10) == 5...8)
+        marks.markIn(9)
+        #expect(marks.outPoint == nil)
+        #expect(marks.range(duration: 10) == 9...10)
+        marks.markOut(2)
+        #expect(marks.inPoint == nil)
+        #expect(marks.range(duration: 10) == 0...2)
+    }
+
+    @Test func marksThatKeepEverythingOrNothingHaveNoRange() {
+        #expect(TrimMarks(inPoint: 0, outPoint: 10).range(duration: 10) == nil)
+        #expect(TrimMarks(inPoint: 10, outPoint: nil).range(duration: 10) == nil)
+        #expect(TrimMarks().range(duration: 10) == nil)
+    }
+
+    @Test func fourQuarterTurnsComeBack() throws {
+        let one: Int32 = 0x10000
+        let start = TrackMatrix(a: one, b: 0, u: 0, c: 0, d: one, v: 0, tx: 0, ty: 0, w: 0x4000_0000)
+        let width = 1920 * one
+        let height = 1080 * one
+        let right = try #require(start.rotated(clockwise: true, width: width, height: height))
+        #expect(right == TrackMatrix(a: 0, b: one, u: 0, c: -one, d: 0, v: 0, tx: height, ty: 0, w: 0x4000_0000))
+        #expect(right.rotated(clockwise: false, width: width, height: height) == start)
+        var turned = start
+        for _ in 0..<4 { turned = try #require(turned.rotated(clockwise: true, width: width, height: height)) }
+        #expect(turned == start)
+        var left = start
+        for _ in 0..<4 { left = try #require(left.rotated(clockwise: false, width: width, height: height)) }
+        #expect(left == start)
+        #expect(TrackMatrix(a: one / 2, b: 0, u: 0, c: 0, d: one / 2, v: 0, tx: 0, ty: 0, w: 0).rotated(clockwise: true, width: width, height: height) == nil)
+    }
+
+    @Test(arguments: [("clip.mp4", AVFileType.mp4), ("clip.mov", AVFileType.mov)])
+    func rotatingChangesOnlyTheMatrix(name: String, type: AVFileType) async throws {
+        let url = try folder().appendingPathComponent(name)
+        try await makeClip(url, type: type)
+        let before = try Data(contentsOf: url)
+        let header = try #require(try VideoEditor.videoTrackHeaders(in: url).first)
+
+        try VideoEditor.rotate(url, clockwise: true)
+        let after = try Data(contentsOf: url)
+        #expect(after.count == before.count)
+        let offset = Int(header.matrixOffset)
+        let differing = zip(before, after).enumerated().filter { $0.element.0 != $0.element.1 }.map(\.offset)
+        #expect(!differing.isEmpty)
+        #expect(differing.allSatisfy { (offset..<(offset + 36)).contains($0) })
+        #expect(try await shownSize(of: url) == CGSize(width: 16, height: 32))
+        let turned = try await transform(of: url)
+        #expect((turned.a, turned.b, turned.c, turned.d) == (0, 1, -1, 0))
+        #expect(try await brightness(of: url, at: 1) > 0)
+
+        try VideoEditor.rotate(url, clockwise: false)
+        #expect(try Data(contentsOf: url) == before)
+        for _ in 0..<4 { try VideoEditor.rotate(url, clockwise: true) }
+        #expect(try Data(contentsOf: url) == before)
+    }
+
+    @Test func aFileThatIsntAMovieIsLeftAlone() throws {
+        let url = try folder().appendingPathComponent("not.mp4")
+        let bytes = Data(repeating: 7, count: 4096)
+        try bytes.write(to: url)
+        #expect(throws: VideoEditorError.self) { try VideoEditor.rotate(url, clockwise: true) }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+
+    @Test func aTrimStartsOnTheMarkedFrameAndKeepsTheRotation() async throws {
+        let directory = try folder()
+        let url = directory.appendingPathComponent("clip.mov")
+        try await makeClip(url, type: .mov)
+        try VideoEditor.rotate(url, clockwise: true)
+        let before = try Data(contentsOf: url)
+        let part = try VideoEditor.makePartFolder(beside: url)
+        let built = try await VideoEditor.exportTrim(of: url, marks: TrimMarks(inPoint: 1.3, outPoint: 2.3), into: part) { _ in }
+
+        let duration = try await AVURLAsset(url: built).load(.duration).seconds
+        #expect(abs(duration - 1) < 0.15)
+        #expect(try await shownSize(of: built) == CGSize(width: 16, height: 32))
+        let expected = try await brightness(of: url, at: 1.3)
+        let actual = try await brightness(of: built, at: 0)
+        #expect(abs(expected - actual) <= 3)
+        #expect(try Data(contentsOf: url) == before)
+    }
+
+    @Test func aCopyTakesAFreeNameAndKeepsTheOriginal() async throws {
+        let directory = try folder()
+        let url = directory.appendingPathComponent("clip.mp4")
+        try await makeClip(url, type: .mp4)
+        try (url as NSURL).setResourceValue(["Blue"], forKey: .tagNamesKey)
+        let before = try Data(contentsOf: url)
+        for expected in ["clip trimmed.mp4", "clip trimmed 2.mp4"] {
+            let part = try VideoEditor.makePartFolder(beside: url)
+            let built = try await VideoEditor.exportTrim(of: url, marks: TrimMarks(inPoint: 1, outPoint: nil), into: part) { _ in }
+            let copy = try VideoEditor.publishCopy(built, of: url)
+            #expect(copy.lastPathComponent == expected)
+            #expect(FinderTags.read(copy).map(\.name) == ["Blue"])
+            try FileManager.default.removeItem(at: part)
+        }
+        #expect(try Data(contentsOf: url) == before)
+        let names = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+        #expect(Set(names) == ["clip.mp4", "clip trimmed.mp4", "clip trimmed 2.mp4"])
+    }
+
+    @Test func replacingPutsTheOriginalAsideAndAFailedTrashChangesNothing() async throws {
+        let directory = try folder()
+        let holding = try folder()
+        let url = directory.appendingPathComponent("clip.mp4")
+        try await makeClip(url, type: .mp4)
+        let before = try Data(contentsOf: url)
+        let part = try VideoEditor.makePartFolder(beside: url)
+        let built = try await VideoEditor.exportTrim(of: url, marks: TrimMarks(inPoint: nil, outPoint: 1), into: part) { _ in }
+
+        #expect(throws: VideoEditorError.self) {
+            _ = try VideoEditor.publishReplacing(url, with: built) { _ in throw VideoEditorError.cantExport }
+        }
+        #expect(try Data(contentsOf: url) == before)
+
+        let trashed = try VideoEditor.publishReplacing(url, with: built) { source in
+            let held = holding.appendingPathComponent(source.lastPathComponent)
+            try FileManager.default.moveItem(at: source, to: held)
+            return FileOperations.TrashedItem(original: source, trashed: held)
+        }
+        #expect(try Data(contentsOf: trashed.trashed) == before)
+        let duration = try await AVURLAsset(url: url).load(.duration).seconds
+        #expect(abs(duration - 1) < 0.15)
+    }
+
+    @Test func onlyMP4AndQuickTimeCanBeEdited() {
+        #expect(VideoEditor.canEdit(.mpeg4Movie))
+        #expect(VideoEditor.canEdit(.quickTimeMovie))
+        #expect(!VideoEditor.canEdit(.avi))
+        #expect(!VideoEditor.canEdit(.png))
+        #expect(!VideoEditor.canEdit(nil))
+    }
+}
+
+@Suite struct WaveformTests {
+    /// Silence with a loud burst starting at `burst` of the way through. 10 seconds at 8 kHz.
+    private func makeAudio(channels: AVAudioChannelCount = 1, burst: Double, level: Float = 0.1) throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("WaveformTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("audio.wav")
+        let format = try #require(AVAudioFormat(standardFormatWithSampleRate: 8000, channels: channels))
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        let frames: AVAudioFrameCount = 80000
+        let buffer = try #require(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+        buffer.frameLength = frames
+        let start = Int(Double(frames) * burst)
+        // Only the last channel, so a peak has to look across channels.
+        let channel = try #require(buffer.floatChannelData?[Int(channels) - 1])
+        for index in start..<min(start + 800, Int(frames)) { channel[index] = level }
+        try file.write(from: buffer)
+        return url
+    }
+
+    @Test(arguments: [AVAudioChannelCount(1), 2])
+    func levelsFallWhereTheSoundIs(channels: AVAudioChannelCount) async throws {
+        let levels = try await WaveformReader.read(try makeAudio(channels: channels, burst: 0.5))
+        #expect(levels.count == WaveformReader.levelCount)
+        let loud = levels.indices.filter { levels[$0] > 0.5 }
+        #expect(!loud.isEmpty)
+        let middle = Double(WaveformReader.levelCount) / 2
+        #expect(abs(Double(loud[0]) - middle) <= 2)
+        #expect(Double(loud[loud.count - 1]) < middle + Double(WaveformReader.levelCount) * 0.015)
+        #expect(levels[10] < 0.01)
+    }
+
+    @Test func quietSoundsAreScaledUp() async throws {
+        let levels = try await WaveformReader.read(try makeAudio(burst: 0.2, level: 0.05))
+        #expect(abs((levels.max() ?? 0) - 1) < 0.001)
+    }
+
+    @Test func silenceStaysFlat() {
+        #expect(WaveformReader.normalized([0, 0, 0]) == [0, 0, 0])
+    }
+
+    @Test func aSteadySoundHasALevelBelowItsPeak() async throws {
+        let levels = try await WaveformReader.read(try makeAudio(burst: 0.5))
+        #expect(levels.filter { $0 > 0.9 }.count >= 2)
+    }
+
+    @Test func barsKeepShortSounds() {
+        var levels = [Float](repeating: 0, count: 1600)
+        levels[801] = 1
+        let bars = WaveformReader.bars(levels, count: 100)
+        #expect(bars.count == 100)
+        #expect(bars[50] == 1)
+        #expect(bars.filter { $0 > 0 }.count == 1)
+        #expect(WaveformReader.bars(levels, count: 0).isEmpty)
+        #expect(WaveformReader.bars([0.5], count: 4) == [0.5, 0.5, 0.5, 0.5])
+    }
+
+    @Test func aFileThatIsntAudioThrows() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("WaveformTests-\(UUID().uuidString).wav")
+        try Data(repeating: 1, count: 100).write(to: url)
+        await #expect(throws: (any Error).self) { try await WaveformReader.read(url) }
+    }
+}
+

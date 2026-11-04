@@ -89,6 +89,7 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | Key | Action |
 | --- | --- |
 | Space, or a click on the picture | Play or pause. A clip that has ended restarts. |
+| A click on an audio file's waveform | Plays from that point. Dragging listens for the place first, and playback starts on release. |
 | `L` | Play forward. Each press doubles the speed, up to 8×. |
 | `J` | Play backward, with the same doubling |
 | `K` | Pause |
@@ -96,11 +97,12 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | `F` or `P`, or the full-screen button | Full screen for videos and photos. `F`, `P`, or `Esc` exits. |
 
 - The keys work with focus in the browser, the card list, or the inspector. They type normally while a name is being edited, and `J`, `K`, and `L` stay available for type-select when the selection can't be played.
+- Audio files show a waveform in place of the picture, read in the background when selected, stopped on moving on, and kept in memory. Any format the system can decode works, and a file it can't read shows its icon.
 - A clip opens only when it first plays, so browsing doesn't read whole files. If a clip is playing when the selection moves to another one, the next one plays too, at normal speed.
 - Playback pauses when the inspector is hidden or the tab goes to the background. Pressing Space with the inspector hidden shows it.
 - The preview follows the file's shape, so vertical footage and photos can use most of the panel's height.
 - Backward playback at 1× and 2× shows every frame the display can, decoded at up to 1920 pixels on the long side and silent. At 4× and 8× it uses `AVPlayer`, which is already smooth there. Pausing returns to the same frame at full resolution.
-- Full screen opens and closes with no animation, covers the menu bar and Dock on that screen, and stays in the current Space. With more than one display, its controls offer the others. The choice is remembered, and falls back to the window's display when that one isn't connected. Playback keys keep working, Up and Down move through the list behind it, and controls hide after a moment without mouse movement. Moving to something that can't be shown closes it.
+- Full screen opens and closes with no animation, covers the menu bar and Dock on that screen, and stays in the current Space. With more than one display, its controls offer the others. The choice is remembered, and falls back to the window's display when that one isn't connected. Playback keys keep working, Up and Down move through the list behind it, and controls hide after a moment without mouse movement, unless the pointer is on them or the clip has trim marks. Moving to something that can't be shown closes it.
 - Below a landscape video's details, a grid of evenly spaced frames fills the remaining height, showing only whole rows. Clicking a frame jumps there, and the frame nearest the playhead is outlined.
 
 ## 5. File operations
@@ -109,11 +111,14 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | --- | --- |
 | Open / Open With | Default app, or chosen app |
 | Space | Plays or pauses the selection in the inspector. See "Preview and playback". |
-| Drag out of the app | Real file URLs, usable by DaVinci Resolve and Finder. Copy and link only, so dragging out can't move files. Finder currently makes an alias. |
-| Drag within the app, or in from Finder | Drop on a folder row to go inside it, anywhere else in a column to go into that column's folder, or on a section header, which is the way into a collapsed or empty section. Moves on the same volume and copies across volumes. Option forces a copy, and Command forces a move. Goes through the same verified copy, queue, naming, and undo as paste. A card's files are only copied, and nothing can be dropped on a card. |
+| Drag out of the app | Real file URLs, usable by DaVinci Resolve and Finder. Copy only, so dragging out can't move files, and Finder makes a copy rather than an alias. |
+| Drag within the app, or in from Finder | Drop on a folder row to go inside it, anywhere else in a column to go into that column's folder, or on a section header, which is the way into a collapsed or empty section. Moves on the same volume and copies across volumes. Option forces a copy, and Command forces a move. Goes through the same verified copy, queue, naming, and undo as paste. A card's files are only copied, and nothing can be dropped on a card. Resting on a folder opens it in the next column, and resting on a collapsed section's header opens the section and keeps it open, using the system's spring-loading setting and delay. |
+| Trim a video | For MP4 and QuickTime files off a card. `I` and `O` mark the in and out points at the current frame, shown on the scrubber in the inspector and full screen, and an unset mark means the clip's start or end. A mark that passes the other clears it, and `X` clears both. Marks are kept per file until the tab closes. **Save** (`⌘S`) replaces the file with the marked part and puts the original in the Trash, keeping its Finder tags. **Save Copy** (`⇧⌘S`) writes `name trimmed.ext` beside it. Both run in the background with progress and Cancel, never re-encode, start on the exact marked frame through an edit list, and can be undone. |
+| Rotate a video | `⌘L`, or the button under the player, turns it a quarter turn counterclockwise, at once and with no save. Only the video tracks' display matrices in the file's header change, so the picture and sound stay byte for byte, the file's size stays the same, and `⌘Z` turns it back. |
+| Rotate and crop an image | For JPEG, PNG, HEIC, and single-image TIFF files off a card, from the bar under the preview or the Tools menu: `⌘L` rotates counterclockwise, and `⌘K` starts a crop. While cropping, drag a grip to resize, inside to move, or outside to draw a new selection, then `Return` applies and `Esc` cancels. Edits stay in memory until saved, and selecting something else discards them. **Save** (`⌘S`) puts the new version in the file's place and the original in the Trash, keeping its Finder tags. **Save Copy** (`⇧⌘S`) writes `name edited.ext` beside it. Both can be undone. JPEG and HEIC are re-encoded at 95% quality. RAW, PSD, and PDF can't be edited. |
 | Rename | Inline, with `Return`. A taken name is refused, never replaced. |
 | Rename a project | **Rename…** in the sidebar's context menu edits the project's date and name, which make up its `YYYYMMDD_name` folder name. **Today** fills in the current date, and clearing the date leaves it undated. Open tabs and favorites follow, and `⌘Z` undoes it. Refused while importing into that project. |
-| New folder | `⇧⌘N` creates it inside the selected folder, or in the current column if none is selected. The column's context menu creates it in that column. The name starts in edit mode. |
+| New folder | `⇧⌘N` creates it inside the selected folder, or in the current column if none is selected. The column's context menu creates it in that column, and a section header's context menu in that section. The name starts in edit mode, except from a collapsed or empty section's header. Every list ends in blank space, so a full one still has somewhere to right-click. |
 | Copy | `⌘C` puts the selected files on the clipboard, so they can also be pasted in Finder. Available on a camera card. |
 | Paste | `⌘V` copies clipboard files, from ReelDock or Finder, inside the selected folder or into the current column. Pasting a folder that's still selected copies it beside itself. A section header's context menu pastes into that section, including an empty one. Every file is verified as in "Copy pipeline", and Finder tags, permissions, and dates carry over. |
 | Move Here | `⌥⌘V` moves clipboard files to the same place. Within a volume it's a rename. Across volumes the files are copied and verified, and then the originals go to the Trash. If that fails, both are kept and an alert says so. |
@@ -124,7 +129,7 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | Delete | `⌘⌫` moves to Trash, with no permanent delete, and plays Finder's Trash sound, which follows the system's setting for user interface sound effects. The next file is then selected. |
 | Undo | `⌘Z` undoes a new folder, a rename, a move to Trash, a paste, or a move. Undoing a paste sends the copies to the Trash. Undoing a move across volumes puts the originals back and sends the copies to the Trash, and can't be redone. Putting a file back never replaces one created since. |
 | Camera cards | All of the above except copying are unavailable on a camera card, in any folder view |
-| Reveal in Finder | Available on every item |
+| Reveal in Finder | `⌘F` shows the selection in Finder, or the open folder if nothing is selected. Available on every item. |
 
 Changes made outside the app appear automatically through FSEvents.
 
@@ -140,7 +145,7 @@ Behavior:
 
 - Tag dots appear on rows, section headers, favorites, project-list entries, and window tabs. A tag with no color shows as a hollow dot.
 - In the sidebar, the new-tab project list, and window tabs, dots sit in front of the name. Project lists keep that space on untagged rows so titles line up.
-- Menus use Finder's row of seven color dots. A dot is checked when every selected item has a tag of that color, and unchecking it removes every tag of that color. Tags with other names, and New Tag, are under More Tags.
+- Menus use Finder's row of seven color dots. A dot is checked when every selected item has a tag of that color, and unchecking it removes every tag of that color. Tags with other names, and New Tag, are under More Tags, which lists the tags Spotlight finds on files and those Finder's preferences name. A tag known only from those preferences shows without its color, and a tag found in neither isn't listed.
 - Tags can be applied to multi-selections from the inspector or the context menu, and undone. A shortcut is not built yet.
 - Suggestions come from the seven standard color tags plus tags seen on files. No public API listing Finder's full tag catalog was found.
 - Setting a color on a brand-new tag is out of scope for v1. Users can create the color in Finder.

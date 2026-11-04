@@ -69,6 +69,7 @@ private struct SingleItemInspector: View {
     @State private var poster: NSImage?
     @State private var media: MediaInfo?
     @State private var folderCount: Int?
+    @State private var waveform: [Float]?
 
     var body: some View {
         GeometryReader { proxy in
@@ -76,14 +77,21 @@ private struct SingleItemInspector: View {
             VStack(alignment: .leading, spacing: 10) {
                 previewArea
                     .frame(width: width, height: previewHeight(width: width, available: proxy.size.height))
+                if canEditImage {
+                    ImageEditBar(session: session, controller: controller)
+                }
                 if item.isPlayable {
                     TransportBar(
                         playback: playback,
                         duration: media?.duration ?? 0,
                         frameRate: media?.frameRate,
                         isFullScreen: false,
-                        canGoFullScreen: item.canPreviewFullScreen
+                        canGoFullScreen: item.canPreviewFullScreen,
+                        marks: tab.trimMarks[item.id]
                     ) { controller?.toggleFullScreenPreview() }
+                }
+                if canEditVideo {
+                    VideoEditBar(item: item, tab: tab, frameRate: media?.frameRate, duration: media?.duration ?? 0, controller: controller)
                 }
                 header
                 details
@@ -91,7 +99,7 @@ private struct SingleItemInspector: View {
                     TagRow(controller: controller, items: [item])
                 }
                 if item.isVideo, let duration = media?.duration, duration > 0 {
-                    FrameGrid(url: item.url, duration: duration, aspect: aspect, playback: playback)
+                    FrameGrid(url: item.url, modified: item.modified, duration: duration, aspect: aspect, playback: playback)
                 } else {
                     Spacer(minLength: 0)
                 }
@@ -100,13 +108,21 @@ private struct SingleItemInspector: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
         }
         .clipped()
-        .task(id: item.id) { await loadDetails() }
+        // The date too, so a saved edit shows up.
+        .task(id: "\(item.id)|\(item.modified?.timeIntervalSince1970 ?? 0)") { await loadDetails() }
     }
 
     private var canEditTags: Bool { !FileOperations.isOnCameraCard(item.url) }
+    private var canEditImage: Bool { WorkspaceWindowController.canEdit(item) }
+    private var canEditVideo: Bool { WorkspaceWindowController.canEditVideo(item) }
+    private var session: ImageEditSession? { tab.imageEdit }
+    private var editedImage: CGImage? { session?.image }
 
     /// Follows the file's own shape, so vertical footage and photos can use the panel's height.
     private var aspect: CGFloat {
+        if let editedImage {
+            return CGFloat(editedImage.width) / CGFloat(editedImage.height)
+        }
         if let width = media?.width, let height = media?.height, width > 0, height > 0 {
             return CGFloat(width) / CGFloat(height)
         }
@@ -118,25 +134,34 @@ private struct SingleItemInspector: View {
 
     private func previewHeight(width: CGFloat, available: CGFloat) -> CGFloat {
         guard item.hasVisualThumbnail else { return min(120, width * 9 / 16) }
-        return min(width / aspect, max(140, available - Self.reservedHeight))
+        return min(width / aspect, max(140, available - Self.reservedHeight - (canEditImage || canEditVideo ? 32 : 0)))
     }
 
     private var previewArea: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 6)
                 .fill(item.hasVisualThumbnail ? AnyShapeStyle(.black) : AnyShapeStyle(.quaternary))
-            if let poster {
+            if let editedImage {
+                Image(decorative: editedImage, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else if let poster {
                 Image(nsImage: poster)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
-            } else if !item.hasVisualThumbnail {
+            } else if !item.hasVisualThumbnail, waveform == nil {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: item.url.path))
                     .resizable()
                     .frame(width: 64, height: 64)
             }
-            if item.isPlayable {
+            if let session, session.crop != nil, let editedImage {
+                CropOverlay(session: session, imageSize: CGSize(width: editedImage.width, height: editedImage.height))
+            } else if item.isPlayable {
                 PlayerLayerRepresentable(playback: playback)
-                PlayerOverlay(playback: playback)
+                if let waveform, let duration = media?.duration, duration > 0 {
+                    WaveformView(levels: waveform, playback: playback, duration: duration)
+                }
+                PlayerOverlay(playback: playback, showsPlayIcon: waveform == nil)
             } else if item.canPreviewFullScreen {
                 FullScreenButton(isFullScreen: false) { controller?.toggleFullScreenPreview() }
                     .padding(6)
@@ -252,6 +277,9 @@ private struct SingleItemInspector: View {
             }.value
         } else if item.isPlayable {
             media = await MediaInfoReader.read(item.url)
+            if item.isAudio {
+                waveform = await WaveformCache.shared.levels(for: item.url, modified: item.modified)
+            }
         }
     }
 }
@@ -259,6 +287,7 @@ private struct SingleItemInspector: View {
 /// Reads the playback state on its own, so the 30 Hz clock only redraws this small view.
 struct PlayerOverlay: View {
     let playback: PlaybackController
+    var showsPlayIcon = true
 
     var body: some View {
         ZStack {
@@ -269,7 +298,7 @@ struct PlayerOverlay: View {
                     .padding(.vertical, 4)
                     .background(.black.opacity(0.6), in: Capsule())
                     .foregroundStyle(.white)
-            } else if !playback.isLoaded {
+            } else if !playback.isLoaded, showsPlayIcon {
                 Image(systemName: "play.circle.fill")
                     .font(.system(size: 36))
                     .symbolRenderingMode(.palette)
@@ -297,6 +326,59 @@ struct PlayerOverlay: View {
     }
 }
 
+/// Click to play from that point, or drag to listen for the right place first.
+private struct WaveformView: View {
+    private static let barWidth: CGFloat = 2
+    private static let barStep: CGFloat = 3
+
+    let levels: [Float]
+    let playback: PlaybackController
+    let duration: Double
+    @State private var isDragging = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let fraction = min(1, max(0, playback.time / duration))
+            let bars = WaveformReader.bars(levels, count: Int(proxy.size.width / Self.barStep))
+            Canvas { context, size in
+                let middle = size.height / 2
+                let reach = size.height / 2 - 6
+                let playedEnd = size.width * fraction
+                var played = Path()
+                var unplayed = Path()
+                for (index, value) in bars.enumerated() {
+                    let x = CGFloat(index) * Self.barStep
+                    let height = max(1, CGFloat(value) * reach)
+                    let bar = CGRect(x: x, y: middle - height, width: Self.barWidth, height: height * 2)
+                    if x < playedEnd { played.addRect(bar) } else { unplayed.addRect(bar) }
+                }
+                context.fill(unplayed, with: .color(.gray))
+                context.fill(played, with: .color(.accentColor))
+                context.fill(Path(CGRect(x: playedEnd - 0.75, y: 0, width: 1.5, height: size.height)), with: .color(.white))
+            }
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        guard proxy.size.width > 0 else { return }
+                        if !isDragging {
+                            isDragging = true
+                            playback.beginScrub()
+                        }
+                        playback.seek(to: duration * min(1, max(0, value.location.x / proxy.size.width)))
+                    }
+                    .onEnded { _ in
+                        isDragging = false
+                        playback.endScrub()
+                        if !playback.isPlaying { playback.togglePlay() }
+                    }
+            )
+        }
+        .help("Click to play from there")
+        .accessibilityLabel("Waveform")
+    }
+}
+
 struct FullScreenButton: View {
     let isFullScreen: Bool
     let action: () -> Void
@@ -319,6 +401,7 @@ struct TransportBar: View {
     let frameRate: Double?
     let isFullScreen: Bool
     var canGoFullScreen = true
+    var marks: TrimMarks?
     let onFullScreen: () -> Void
 
     var body: some View {
@@ -335,7 +418,7 @@ struct TransportBar: View {
             .accessibilityLabel(playback.isPlaying ? "Pause" : "Play")
             Text(Timecode.format(playback.time, frameRate: frameRate))
                 .font(.system(size: 11).monospacedDigit())
-            Scrubber(playback: playback, duration: duration)
+            Scrubber(playback: playback, duration: duration, marks: marks)
             Text(Timecode.format(duration, frameRate: frameRate))
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
@@ -350,6 +433,7 @@ struct TransportBar: View {
 private struct Scrubber: View {
     let playback: PlaybackController
     let duration: Double
+    let marks: TrimMarks?
     @State private var isDragging = false
 
     var body: some View {
@@ -362,6 +446,23 @@ private struct Scrubber: View {
                 Capsule()
                     .fill(Color.accentColor)
                     .frame(width: proxy.size.width * fraction, height: 4)
+                if let marks, !marks.isEmpty, duration > 0 {
+                    // What the marks keep, with a tick at each mark that's set.
+                    let start = min(1, max(0, (marks.inPoint ?? 0) / duration))
+                    let end = min(1, max(start, (marks.outPoint ?? duration) / duration))
+                    Rectangle()
+                        .fill(Color.yellow.opacity(0.45))
+                        .frame(width: proxy.size.width * (end - start), height: 12)
+                        .offset(x: proxy.size.width * start)
+                    if marks.inPoint != nil {
+                        Rectangle().fill(Color.yellow).frame(width: 2, height: 14)
+                            .offset(x: proxy.size.width * start - 1)
+                    }
+                    if marks.outPoint != nil {
+                        Rectangle().fill(Color.yellow).frame(width: 2, height: 14)
+                            .offset(x: proxy.size.width * end - 1)
+                    }
+                }
                 Circle()
                     .fill(.white)
                     .shadow(radius: 1)
@@ -413,6 +514,8 @@ nonisolated struct FrameGridLayout: Equatable {
 /// Evenly spaced frames from the clip. Clicking one jumps there.
 private struct FrameGrid: View {
     let url: URL
+    /// A rotated clip's frames need drawing again.
+    let modified: Date?
     let duration: Double
     let aspect: CGFloat
     let playback: PlaybackController
@@ -436,7 +539,7 @@ private struct FrameGrid: View {
                     PlayheadOutline(playback: playback, duration: duration, layout: layout)
                 }
             }
-            .task(id: "\(url.path)|\(layout.count)") { await load(count: layout.count) }
+            .task(id: "\(url.path)|\(layout.count)|\(modified?.timeIntervalSince1970 ?? 0)") { await load(count: layout.count) }
         }
     }
 

@@ -145,6 +145,120 @@ final class DebugDriver {
             let operation = pane.header.draggingEntered(info)
             let accepted = parts[3] == "perform" && !operation.isEmpty ? pane.header.performDragOperation(info) : false
             return "operation=\(operation.debugName) accepted=\(accepted)"
+        case "springhover":
+            // springhover|section title|column index|row name|paths...
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0],
+                  let row = column.items.firstIndex(where: { $0.name == parts[3] }) else { return "not found" }
+            let table = column.tableView
+            table.layoutSubtreeIfNeeded()
+            let rect = table.rect(ofRow: row)
+            column.updateSpringLoad(DebugDragInfo(files: Array(parts.dropFirst(4)), mask: "all", location: table.convert(NSPoint(x: rect.midX, y: rect.midY), to: nil)))
+        case "imageedit":
+            // imageedit|left, right, crop, setcrop|x|y|w|h, apply, cancel, save, copy, revert
+            switch parts[1] {
+            case "left": controller.rotateImage(clockwise: false)
+            case "right": controller.rotateImage(clockwise: true)
+            case "crop": controller.beginImageCrop()
+            case "setcrop": controller.tab.imageEdit?.crop = CGRect(x: Double(parts[2]) ?? 0, y: Double(parts[3]) ?? 0, width: Double(parts[4]) ?? 1, height: Double(parts[5]) ?? 1)
+            case "apply": controller.tab.imageEdit?.applyCrop()
+            case "cancel": controller.tab.imageEdit?.crop = nil
+            case "save": controller.saveImageEdit(asCopy: false)
+            case "copy": controller.saveImageEdit(asCopy: true)
+            case "revert": controller.discardImageEdit()
+            default: return "unknown"
+            }
+        case "inspectorsnapshot":
+            // inspectorsnapshot|path: draws the inspector alone, which the window snapshot leaves blank.
+            guard let view = controller.debugInspectorItem?.viewController.view,
+                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no view" }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+            return "ok \(bitmap.pixelsWide)x\(bitmap.pixelsHigh)"
+        case "previewsnapshot":
+            // previewsnapshot|path: draws the full-screen preview's window.
+            guard let view = NSApp.windows.first(where: { $0.level == .statusBar })?.contentView,
+                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no view" }
+            view.cacheDisplay(in: view.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+            return "ok \(bitmap.pixelsWide)x\(bitmap.pixelsHigh)"
+        case "previewmove":
+            // previewmove|x|y: a mouse move in the full-screen preview, from its bottom left.
+            guard let window = NSApp.windows.first(where: { $0.level == .statusBar }),
+                  let event = NSEvent.mouseEvent(with: .mouseMoved, location: NSPoint(x: Double(parts[1]) ?? 0, y: Double(parts[2]) ?? 0), modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 0, pressure: 0) else { return "no window" }
+            window.sendEvent(event)
+            return "moved \(window.frame.size)"
+        case "waveclick":
+            // waveclick|fraction: the same calls as a click on the waveform, which a script can't make.
+            let playback = controller.tab.playback
+            playback.player.volume = 0
+            let duration = playback.player.currentItem?.duration.seconds ?? Double(parts[safe: 2] ?? "") ?? 0
+            playback.beginScrub()
+            playback.seek(to: duration * (Double(parts[1]) ?? 0))
+            playback.endScrub()
+            if !playback.isPlaying { playback.togglePlay() }
+            return "duration=\(duration)"
+        case "clipedit":
+            // clipedit|left, right, in, out, clear, save, copy, cancel, key-i, key-o
+            switch parts[1] {
+            case "left": controller.rotateVideo(clockwise: false)
+            case "right": controller.rotateVideo(clockwise: true)
+            case "in": controller.markTrimIn()
+            case "out": controller.markTrimOut()
+            case "clear": controller.clearTrimMarks()
+            case "save": controller.saveVideoTrim(asCopy: false)
+            case "copy": controller.saveVideoTrim(asCopy: true)
+            case "cancel": controller.tab.videoExport?.task?.cancel()
+            case "key-i", "key-o", "key-x":
+                guard let window = controller.window, let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: parts[1] == "key-i" ? 34 : parts[1] == "key-o" ? 31 : 7) else { return "no event" }
+                return "handled=\(controller.handleShortcutKey(event))"
+            default: return "unknown"
+            }
+        case "clipstate":
+            let tab = controller.tab
+            let item = tab.selection.first
+            return "selection=\(tab.selection.map(\.name)) canEdit=\(item.map(WorkspaceWindowController.canEditVideo) ?? false) marks=\(item.flatMap { tab.trimMarks[$0.id] }.map { "\($0.inPoint ?? -1)...\($0.outPoint ?? -1)" } ?? "-") exporting=\(tab.videoExport != nil) progress=\(tab.videoExport?.progress ?? 0) time=\(tab.playback.time) loaded=\(tab.playback.isLoaded) failed=\(tab.playback.failed)"
+        case "imagestate":
+            let session = controller.tab.imageEdit
+            return "session=\(session != nil) size=\(session?.image.map { "\($0.width)x\($0.height)" } ?? "-") edited=\(session?.isEdited ?? false) working=\(session?.isWorking ?? false) crop=\(session?.crop.map { "\($0)" } ?? "-") selection=\(controller.tab.selection.map(\.name)) canEdit=\(controller.tab.selection.first.map(WorkspaceWindowController.canEdit) ?? false)"
+        case "cropkey":
+            // cropkey|return or esc: goes through the same path as a real key.
+            guard let window = controller.window, let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: window.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: parts[1] == "return" ? 36 : 53) else { return "no event" }
+            return "handled=\(controller.handleShortcutKey(event))"
+        case "dragend":
+            // dragend|section title|column index: what AppKit calls when a drag ends, dropped or not.
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            column.tableView.draggingEnded(DebugDragInfo(files: [], mask: "all", location: .zero))
+            return "survived"
+        case "springcancel":
+            content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0]?.cancelSpringLoad()
+        case "springheader":
+            // springheader|section title|enter or exit|paths...
+            guard let pane = content.debugPane(parts[1]) else { return "not found" }
+            if parts[2] == "exit" {
+                pane.header.draggingExited(nil)
+            } else {
+                _ = pane.header.draggingEntered(DebugDragInfo(files: Array(parts.dropFirst(3)), mask: "all", location: .zero))
+            }
+        case "columnlist":
+            guard let browser = content.debugBrowser(parts[1]) else { return "not found" }
+            return browser.columns.map(\.folderURL.lastPathComponent).joined(separator: " > ")
+        case "tablefill":
+            // tablefill|section title|column index: whether the space past the last row is reachable.
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            let table = column.tableView
+            table.layoutSubtreeIfNeeded()
+            let clip = table.enclosingScrollView?.contentView
+            table.scroll(NSPoint(x: 0, y: max(0, table.frame.height - (clip?.bounds.height ?? 0))))
+            let bottom = NSPoint(x: 20, y: table.frame.height - 4)
+            let rowsEnd = CGFloat(table.numberOfRows) * table.rowHeight
+            let hit = table.window?.contentView?.hitTest(table.window?.contentView?.convert(table.convert(bottom, to: nil), from: nil) ?? .zero)
+            return "rows=\(table.numberOfRows) rowsEnd=\(Int(rowsEnd)) table=\(Int(table.frame.height)) clip=\(Int(clip?.bounds.height ?? 0)) rowAtBottom=\(table.row(at: bottom)) hit=\(hit.map { String(describing: type(of: $0)) } ?? "nil") menu=\(column.backgroundMenu()?.items.map(\.title) ?? [])"
+        case "headermenu":
+            return content.debugPane(parts[1])?.header.makeMenu?()?.items.map(\.title).description ?? "none"
+        case "headermenuitem":
+            // headermenuitem|section title|item title
+            guard let item = content.debugPane(parts[1])?.header.makeMenu?()?.items.first(where: { $0.title == parts[2] }) else { return "no item" }
+            NSApp.sendAction(item.action!, to: item.target, from: item)
         case "dragtypes":
             guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
             return "table=\(column.tableView.registeredDraggedTypes.map(\.rawValue)) header=\(content.debugPane(parts[1])?.header.registeredDraggedTypes.map(\.rawValue) ?? [])"

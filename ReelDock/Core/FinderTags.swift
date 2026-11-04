@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 
 nonisolated struct FinderTag: Identifiable, Hashable, Sendable {
     let name: String
@@ -98,13 +99,48 @@ nonisolated enum FinderTags {
         }
     }
 
+    /// macOS has no public list of Finder's tags. Its preferences name the tags in its sidebar and the ones that have been opened there.
+    static func names(inFinderPreferences preferences: [String: Any]) -> [String] {
+        let suffix = "_Tag_ViewSettings"
+        let opened = (preferences["ViewSettingsDictionary"] as? [String: Any] ?? [:]).keys
+            .filter { $0.hasSuffix(suffix) }
+            .map { String($0.dropLast(suffix.count)) }
+        let inSidebar = preferences["FavoriteTagNames"] as? [String] ?? []
+        return (opened + inSidebar).filter(isValidName)
+    }
+
+    /// Every tag on a file Spotlight has indexed, with its color.
+    static func inSpotlight(limit: Int = 5000) -> [FinderTag] {
+        guard let query = MDQueryCreate(kCFAllocatorDefault, "kMDItemUserTags == \"*\"" as CFString, nil, nil) else { return [] }
+        MDQuerySetMaxCount(query, limit)
+        guard MDQueryExecute(query, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return [] }
+        var tags = Set<FinderTag>()
+        for index in 0..<MDQueryGetResultCount(query) {
+            guard let result = MDQueryGetResultAtIndex(query, index) else { continue }
+            let item = Unmanaged<MDItem>.fromOpaque(result).takeUnretainedValue()
+            guard let path = MDItemCopyAttribute(item, kMDItemPath) as? String else { continue }
+            tags.formUnion(read(URL(fileURLWithPath: path)))
+        }
+        return Array(tags)
+    }
+
+    /// What can be found of the tags on this Mac. A tag only seen in Finder's preferences has no known color.
+    static func onThisMac() -> [FinderTag] {
+        let preferences = UserDefaults(suiteName: "com.apple.finder")?.dictionaryRepresentation() ?? [:]
+        return inSpotlight() + names(inFinderPreferences: preferences).map { FinderTag(name: $0, colorIndex: 0) }
+    }
+
     /// The standard tags first, then every other tag in use, each marked by how many items have it.
+    /// A name seen with and without a color keeps the color.
     static func choices(standard: [FinderTag], seen: [FinderTag], current: [[FinderTag]]) -> [TagChoice] {
         let inUse = seen + current.flatMap { $0 }
         var known = standard
         var names = Set(standard.map(\.name))
         let others = inUse
-            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .sorted {
+                let order = $0.name.localizedStandardCompare($1.name)
+                return order == .orderedSame ? $0.colorIndex > $1.colorIndex : order == .orderedAscending
+            }
             .filter { names.insert($0.name).inserted }
         known += others
         return known.map { tag in

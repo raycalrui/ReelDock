@@ -70,8 +70,15 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 - [x] Drag in and between sections, onto folder rows, columns, and section headers (drop handling scripted with a stand-in for the drag on temporary fixtures, a temporary volume, and a simulated card; a real mouse drag and the highlights not exercised)
 - [x] Finder's sound when moving to the Trash (scripted that it's requested and the sound loads, not heard)
 - [x] Inspector shows with a selection and hides without one (scripted, including hiding by hand and a narrow window; the animation not seen on screen)
-- [ ] Open a folder while hovering over it during a drag, as Finder does
-- [ ] Make dragging to Finder copy files. It currently creates an alias, because dragging out only allows copy and link.
+- [x] Open a folder or collapsed section while hovering over it during a drag (scripted with a stand-in for the drag on temporary fixtures; a real mouse drag and a drag whose source column gets replaced not exercised)
+- [x] Make dragging to Finder copy files, by allowing only copy when dragging out (code only: a real drag to Finder or DaVinci Resolve not exercised)
+- [x] Blank space after the last row and New Folder on section headers, so a full list has somewhere to right-click (scripted on temporary fixtures, not seen on screen)
+- [x] List the tags on this Mac under More Tags (read from real Spotlight results and Finder preferences; not compared with Finder's own list)
+- [x] Trim video with I and O marks, saving over the original with it kept in the Trash, or as a copy, without re-encoding (unit tested on generated clips; scripted on clones of real Sony MP4 and MOV clips, including undo, redo, cancelling on a 22 GB clip, and refusing to rotate during a save; real keys and DaVinci Resolve honoring the edit list not exercised)
+- [x] Waveform for audio files, with click to play from a point (read on a real 44-minute WAV in 0.33 s, unit tested, and the drawing and seek scripted on a clone of a real file; a real click not exercised)
+- [x] Keep full-screen controls up while the pointer is on them or the clip has marks (marks scripted with snapshots of the full-screen window; the pointer case needs a real mouse, not exercised)
+- [x] Rotate video at once by changing the header's display matrix (unit tested byte for byte, and scripted on a clone of a real clip, where 7 bytes changed; other apps honoring it not exercised)
+- [x] Rotate and crop images, saving over the original with it kept in the Trash, or as a copy (unit tested, and scripted on temporary JPEG, PNG, HEIC, and TIFF files, including undo and redo of a save; the crop drag's geometry is unit tested, but a real mouse drag and real shortcuts not exercised)
 - [x] Read tags and colors, and show them on rows, section headers, favorites, and the project list (colors read from real projects, rendering scripted on fixtures, sidebar not seen on screen)
 - [x] Write tags on single and multiple selections, with Finder's color row and undo (scripted on fixtures through the palette's own handler, menus not seen on screen, not yet checked in Finder)
 - [x] Show tag dots in front of names on projects, favorites, the new-tab list, and tabs (tabs and the new-tab list seen in snapshots, sidebar not seen on screen)
