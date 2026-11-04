@@ -497,9 +497,14 @@ private struct ProjectPickerView: View {
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(app.projects) { project in
-                        ProjectPickerRow(project: project) {
+                        ProjectPickerRow(
+                            project: project,
+                            thumbnailGeneration: app.thumbnailGenerations[project.folderName, default: 0],
+                            stats: app.projectStats[project.folderName]
+                        ) {
                             app.open(project.url, from: controller)
                         }
+                        .task { app.loadStats(for: project) }
                     }
                 }
                 .frame(maxWidth: 560)
@@ -520,18 +525,23 @@ private struct ProjectPickerView: View {
 
 private struct ProjectPickerRow: View {
     let project: ProjectEntry
+    let thumbnailGeneration: Int
+    let stats: ProjectStats?
     let action: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                LeadingTagDots(tags: project.tags)
+            HStack(spacing: 8) {
+                ProjectThumbnailView(project: project, generation: thumbnailGeneration, width: 80)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(project.title)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    HStack(spacing: 6) {
+                        Text(project.title)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        TagDots(tags: project.tags)
+                    }
                     if let date = project.displayDate {
                         Text(date)
                             .font(.caption)
@@ -539,7 +549,17 @@ private struct ProjectPickerRow: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Spacer(minLength: 0)
+                Spacer(minLength: 8)
+                if let stats {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text(ImportFormat.bytes(stats.size))
+                        Text(stats.fileLabel)
+                    }
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .fixedSize()
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)

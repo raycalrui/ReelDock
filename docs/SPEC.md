@@ -59,16 +59,19 @@ Rules for building sections from what is on disk:
 Project list rules:
 
 - Projects are the direct subfolders of the chosen root, newest first by the date in the name.
+- The sidebar and the new-tab page show a 16:9 thumbnail for each project: a picture in its numbered `cover` folder named `cover … 169`, the first in name order when there are several, otherwise the first frame of the first video in its numbered `video` folder, looking at most two folders down. A project with neither shows a placeholder. Thumbnails follow changes to those folders.
+- Both lists show each project's file count and total size: at the end of the row on the new-tab page, and after the date in the sidebar, which drops the count and then the size when it's too narrow. The size includes hidden files, to match Finder. The count leaves them out and counts a package as one file. Numbers appear once counted, and update a second after changes settle.
 - `00000000_*` folders are templates and are not listed.
 - Projects can be filtered by name, and by one tag from the menu beside the filter field. A tag no project has any more stops filtering.
 - Opening a project that is already open switches to its tab.
 
-Contents load only when they are shown. Real projects can contain Python environments, Git repositories, and deep proxy trees, so nothing scans a whole project in order to display it.
+Contents load only when they are shown. Real projects can contain Python environments, Git repositories, and deep proxy trees, so opening a project never scans the whole of it. Finding a thumbnail reads only the project's top level and its cover and video folders. The one full scan is the count and size in the project lists, which runs in the background and only for rows that have been shown.
 
 ## 3. Tabs
 
 - Native macOS window tabs: `⌘T` new tab, `⌘W` close, `⌘⇧[` and `⌘⇧]` switch. A tab can be dragged out into its own window.
 - A new tab shows the project list.
+- A button beside the window's title copies the open folder's full name, including its date. It shows a check for a moment, and is off on the new-tab page.
 - Open tabs, and the path open in each section, are restored on launch. Missing paths are skipped.
 - Closing the last window keeps them saved, so clicking the Dock icon or launching again brings them back, as after quitting.
 
@@ -144,7 +147,7 @@ Tags are the real Finder tags, not a private copy. Tested on macOS 27.2:
 Behavior:
 
 - Tag dots appear on rows, section headers, favorites, project-list entries, and window tabs. A tag with no color shows as a hollow dot.
-- In the sidebar, the new-tab project list, and window tabs, dots sit in front of the name. Project lists keep that space on untagged rows so titles line up.
+- In the project lists, dots sit right after the name, because the thumbnail holds the front of the row. On favorites and window tabs they sit in front of the name.
 - Menus use Finder's row of seven color dots. A dot is checked when every selected item has a tag of that color, and unchecking it removes every tag of that color. Tags with other names, and New Tag, are under More Tags, which lists the tags Spotlight finds on files and those Finder's preferences name. A tag known only from those preferences shows without its color, and a tag found in neither isn't listed.
 - Tags can be applied to multi-selections from the inspector or the context menu, and undone. A shortcut is not built yet.
 - Suggestions come from the seven standard color tags plus tags seen on files. No public API listing Finder's full tag catalog was found.
@@ -157,7 +160,7 @@ Existing tags already used this way: `Green`, `Orange`, and `Blue` on project fo
 ### Detection
 
 - React to volume mount and unmount notifications.
-- Play a short sound when a card is inserted, but not for a card already in when the app launches.
+- Play the system's Submarine sound when a card is inserted, but not for a card already in when the app launches.
 - A volume is a Sony card if `PRIVATE/M4ROOT/CLIP` exists on it. Do not filter on "external": the built-in SD slot reports `removable=true` and `internal=true`.
 - Device handling lives behind an adapter, so other cameras can be added without changing the main flow. v1 ships only the Sony adapter.
 
@@ -200,6 +203,7 @@ Into [3 video ▾]
 ```
 
 - Clips are grouped by day, then split when the gap between clips exceeds 60 minutes. A group's checkbox selects the whole group.
+- Groups and the clips within them run oldest to newest. Clips with no date come last.
 - Space plays a clip in the inspector. Previews show the source as shot, so S-Log3 looks flat.
 - The panel opens by itself in the front window when a card is inserted or already present at launch, and closes when the last card leaves. The card button closes it, as does `Esc`. With no card, the button is disabled.
 - Every new clip starts selected, so importing a whole card is one click. A group's checkbox and "Select New" never pick clips that are already imported.

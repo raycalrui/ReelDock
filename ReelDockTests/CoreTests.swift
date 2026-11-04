@@ -1248,3 +1248,129 @@ private struct Fixture {
     }
 }
 
+@Suite struct ProjectThumbnailTests {
+    private func makeProject(_ files: [String]) throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        for file in files {
+            let url = root.appendingPathComponent(file)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data().write(to: url)
+        }
+        return root
+    }
+
+    private func name(_ source: ProjectThumbnail.Source?) -> String? {
+        switch source {
+        case .cover(let item): "cover:\(item.name)"
+        case .firstFrame(let item): "video:\(item.name)"
+        case nil: nil
+        }
+    }
+
+    @Test func widePictureNamesAreCovers() throws {
+        let project = try makeProject([
+            "cover 169.jpg", "cover sc 169.png", "COVER 2 169.JPG",
+            "cover.jpg", "cover sc 43.jpg", "cover_01_00_11_69.jpg", "cover 1169.jpg", "poster 169.jpg", "cover 169.mov",
+        ])
+        defer { try? FileManager.default.removeItem(at: project) }
+        let matches = try FolderReader.read(project, showHidden: false).filter(ProjectThumbnail.isWideCover).map(\.name)
+        #expect(Set(matches) == ["cover 169.jpg", "cover sc 169.png", "COVER 2 169.JPG"])
+    }
+
+    @Test func coverWinsOverVideoInNameOrder() throws {
+        let project = try makeProject(["2 cover/cover tc 169.jpg", "2 cover/cover sc 169.jpg", "3 video/a.mp4"])
+        defer { try? FileManager.default.removeItem(at: project) }
+        #expect(name(ProjectThumbnail.source(in: project)) == "cover:cover sc 169.jpg")
+    }
+
+    @Test func otherCoversFallBackToTheFirstVideo() throws {
+        let project = try makeProject(["2cover/cover.jpg", "3video/clip 10.mp4", "3video/clip 2.MOV", "3video/.hidden.mp4", "3video/note.txt"])
+        defer { try? FileManager.default.removeItem(at: project) }
+        #expect(name(ProjectThumbnail.source(in: project)) == "video:clip 2.MOV")
+    }
+
+    @Test func videosBesideFoldersComeFirstAndNestingIsBounded() throws {
+        let beside = try makeProject(["3 video/a/inner.mp4", "3 video/z.mp4"])
+        let nested = try makeProject(["3 video/a/b/inner.mp4"])
+        let tooDeep = try makeProject(["3 video/a/b/c/inner.mp4"])
+        defer { [beside, nested, tooDeep].forEach { try? FileManager.default.removeItem(at: $0) } }
+        #expect(name(ProjectThumbnail.source(in: beside)) == "video:z.mp4")
+        #expect(name(ProjectThumbnail.source(in: nested)) == "video:inner.mp4")
+        #expect(ProjectThumbnail.source(in: tooDeep) == nil)
+    }
+
+    @Test func aProjectWithNeitherHasNoSource() throws {
+        let project = try makeProject(["1 output/final.mp4", "cover 169.jpg"])
+        defer { try? FileManager.default.removeItem(at: project) }
+        #expect(ProjectThumbnail.source(in: project) == nil)
+    }
+
+    @Test func onlyCoverAndVideoChangesAffectAThumbnail() {
+        let root = "/projects"
+        #expect(ProjectThumbnail.projectName(affectedBy: "/projects/a", root: root) == "a")
+        #expect(ProjectThumbnail.projectName(affectedBy: "/projects/a/2 cover", root: root) == "a")
+        #expect(ProjectThumbnail.projectName(affectedBy: "/projects/a/3video/FX3", root: root) == "a")
+        #expect(ProjectThumbnail.projectName(affectedBy: "/projects/a/1 output", root: root) == nil)
+        #expect(ProjectThumbnail.projectName(affectedBy: "/projects", root: root) == nil)
+        #expect(ProjectThumbnail.projectName(affectedBy: "/projects-old/a", root: root) == nil)
+    }
+}
+
+@Suite struct ProjectStatsTests {
+    private func makeFolder(_ files: [String: Int]) throws -> URL {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        for (file, size) in files {
+            let url = root.appendingPathComponent(file)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(count: size).write(to: url)
+        }
+        return root
+    }
+
+    @Test func countsNestedFilesAndAddsTheirSizes() throws {
+        let folder = try makeFolder(["a.mp4": 100, "3 video/b.mp4": 20, "3 video/FX3/c.mp4": 3])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(ProjectStats.read(folder) == ProjectStats(fileCount: 3, size: 123))
+    }
+
+    @Test func hiddenFilesAddToTheSizeButNotTheCount() throws {
+        let folder = try makeFolder([".DS_Store": 7, ".git/objects/x": 10, ".git/config": 1, "a.mp4": 100, "z/b.mp4": 2])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(ProjectStats.read(folder) == ProjectStats(fileCount: 2, size: 120))
+    }
+
+    @Test func aPackageCountsAsOneFile() throws {
+        let folder = try makeFolder(["notes.rtfd/TXT.rtf": 5, "notes.rtfd/image.png": 6, "after.mp4": 1])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(ProjectStats.read(folder) == ProjectStats(fileCount: 2, size: 12))
+    }
+
+    @Test func linksAreNotFollowed() throws {
+        let outside = try makeFolder(["big.mp4": 1000])
+        let folder = try makeFolder(["a.mp4": 1])
+        defer { [outside, folder].forEach { try? FileManager.default.removeItem(at: $0) } }
+        try FileManager.default.createSymbolicLink(at: folder.appendingPathComponent("link"), withDestinationURL: outside)
+        let stats = try #require(ProjectStats.read(folder))
+        #expect(stats.fileCount == 1)
+        #expect(stats.size < 1000)
+    }
+
+    @Test func aMissingOrEmptyFolder() throws {
+        let folder = try makeFolder([:])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        #expect(ProjectStats.read(folder) == ProjectStats(fileCount: 0, size: 0))
+        #expect(ProjectStats.read(folder.appendingPathComponent("gone")) == nil)
+    }
+
+    @Test func fileLabelIsSingularForOne() {
+        #expect(ProjectStats(fileCount: 1, size: 0).fileLabel == "1 file")
+        #expect(ProjectStats(fileCount: 2, size: 0).fileLabel == "2 files")
+    }
+
+    @Test func changesAreTracedToTheirProject() {
+        #expect(ProjectCatalog.projectName(containing: "/projects/a/1 output/x", root: "/projects") == "a")
+        #expect(ProjectCatalog.projectName(containing: "/projects", root: "/projects") == nil)
+        #expect(ProjectCatalog.projectName(containing: "/projects-old/a", root: "/projects") == nil)
+    }
+}

@@ -42,6 +42,11 @@ final class AppModel {
     private(set) var projectRootIsMissing = false
     /// Changes when tags are written, for views that read tags directly.
     private(set) var tagsGeneration = 0
+    /// Counts changes to what each project's thumbnail is made from, by folder name.
+    private(set) var thumbnailGenerations: [String: Int] = [:]
+    /// What each project holds, by folder name. Filled in as rows ask for it.
+    private(set) var projectStats: [String: ProjectStats] = [:]
+    @ObservationIgnored private var statsTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var tagsOnThisMac: [FinderTag] = []
     @ObservationIgnored let partFiles: PartFileRegistry
     /// Files being trimmed, which can't move or change until that's done.
@@ -128,6 +133,9 @@ final class AppModel {
 
     private func watchProjectRoot() {
         rootWatcher = nil
+        statsTasks.values.forEach { $0.cancel() }
+        statsTasks = [:]
+        projectStats = [:]
         guard let root = projectRootURL else {
             projects = []
             projectRootIsMissing = false
@@ -138,8 +146,48 @@ final class AppModel {
             if change.needsFullRescan || change.rootChanged || change.directories.contains(path) {
                 self?.reloadProjects()
             }
+            self?.noteThumbnailChanges(change, root: path)
+            self?.noteStatsChanges(change, root: path)
         }
         reloadProjects()
+    }
+
+    private func noteThumbnailChanges(_ change: FolderWatcher.Change, root: String) {
+        let names = change.needsFullRescan || change.rootChanged
+            ? projects.map(\.folderName)
+            : change.directories.compactMap { ProjectThumbnail.projectName(affectedBy: $0, root: root) }
+        for name in Set(names) {
+            thumbnailGenerations[name, default: 0] += 1
+        }
+    }
+
+    /// Counts only what a row has asked for, once the changes settle, so a long copy doesn't scan over and over.
+    private func noteStatsChanges(_ change: FolderWatcher.Change, root: String) {
+        guard let rootURL = projectRootURL else { return }
+        let names = Set(projectStats.keys).union(statsTasks.keys)
+        let changed = change.needsFullRescan || change.rootChanged
+            ? names
+            : names.intersection(change.directories.compactMap { ProjectCatalog.projectName(containing: $0, root: root) })
+        for name in changed {
+            scanStats(name: name, url: rootURL.appendingPathComponent(name, isDirectory: true), delay: .seconds(1))
+        }
+    }
+
+    func loadStats(for project: ProjectEntry) {
+        guard projectStats[project.folderName] == nil, statsTasks[project.folderName] == nil else { return }
+        scanStats(name: project.folderName, url: project.url, delay: .zero)
+    }
+
+    private func scanStats(name: String, url: URL, delay: Duration) {
+        statsTasks[name]?.cancel()
+        statsTasks[name] = Task {
+            try? await Task.sleep(for: delay)
+            guard !Task.isCancelled else { return }
+            let stats = await Task.detached(priority: .utility) { ProjectStats.read(url) }.value
+            guard !Task.isCancelled else { return }
+            projectStats[name] = stats
+            statsTasks[name] = nil
+        }
     }
 
     func reloadProjects() {
@@ -151,6 +199,9 @@ final class AppModel {
             let wasEmpty = projects.isEmpty
             projects = result ?? []
             projectRootIsMissing = result == nil
+            // A renamed project's old name could come back, and it shouldn't bring old numbers with it.
+            let names = Set(projects.map(\.folderName))
+            projectStats = projectStats.filter { names.contains($0.key) }
             controllers.forEach { $0.refreshTabTags() }
             // The new-tab page shows the list once it's there. Until then it's a plain page.
             if wasEmpty, !projects.isEmpty {

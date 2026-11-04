@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import QuickLookThumbnailing
 
@@ -43,6 +44,21 @@ final class ThumbnailCache {
             }
         }
         return request
+    }
+
+    /// A video's actual first frame. Quick Look chooses a frame of its own, usually further in.
+    func firstFrame(of url: URL, modified: Date?, size: CGFloat, scale: CGFloat) async -> NSImage? {
+        let cacheKey = "first|" + key(url, modified, size)
+        if let image = images.object(forKey: cacheKey as NSString) { return image }
+        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        generator.maximumSize = CGSize(width: size * scale, height: size * scale)
+        guard let cgImage = try? await generator.image(at: .zero).image else { return nil }
+        let result = NSImage(cgImage: cgImage, size: .zero)
+        images.setObject(result, forKey: cacheKey as NSString)
+        return result
     }
 
     func cancel(_ request: QLThumbnailGenerator.Request) {

@@ -18,6 +18,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     private let splitController = WorkspaceSplitViewController()
     private let modeControl = NSSegmentedControl()
+    private let titleLabel = WindowTitleLabel(labelWithString: "ReelDock")
+    private let copyNameButton = NSButton()
+    private let titleBar = NSStackView()
+    private var copyNameReset: Task<Void, Never>?
     private weak var favoriteItem: NSToolbarItem?
     private weak var importItem: NSToolbarItem?
     private var contentItem: NSSplitViewItem?
@@ -33,9 +37,14 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     private static let defaultInspectorWidth: CGFloat = 440
     /// A delete or a refresh can clear the selection just before the next one, and that shouldn't flash the inspector.
     private static let inspectorHideDelay: Duration = .milliseconds(200)
+    private static let titleInset: CGFloat = 20
+    private static let sidebarButtonWidth: CGFloat = 60
     #if DEBUG
     var debugInspectorItem: NSSplitViewItem? { inspectorItem }
+    var debugSidebarItem: NSSplitViewItem? { splitController.splitViewItems.first }
     var debugImportItem: NSToolbarItem? { importItem }
+    var debugCopyNameButton: NSButton { copyNameButton }
+    var debugTitleBar: NSView { titleBar }
     var debugSidebarView: NSView? { splitController.splitViewItems.first?.viewController.view }
     func debugChooseScreen() {
         if let screen = NSScreen.screens.last { fullScreenPreview?.choose(screen) }
@@ -58,6 +67,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         window.minSize = NSSize(width: 900, height: 480)
         window.isRestorable = false
         window.toolbarStyle = .unified
+        window.titleVisibility = .hidden
         window.title = "ReelDock"
         super.init(window: window)
 
@@ -66,6 +76,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         buildSplit()
         buildToolbar()
         window.contentViewController = splitController
+        buildTitleBar()
         window.setContentSize(NSSize(width: 1320, height: 860))
         if !window.setFrameUsingName("ReelDockWorkspace") { window.center() }
         window.setFrameAutosaveName("ReelDockWorkspace")
@@ -84,7 +95,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         let sidebarHost = NSHostingController(rootView: SidebarView(app: app, tab: tab, controller: self))
         sidebarHost.sizingOptions = []
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarHost)
-        sidebarItem.minimumThickness = 200
+        // Wide enough for a project's date and size side by side beside its thumbnail.
+        sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 340
 
         let contentItem = NSSplitViewItem(contentListWithViewController: content)
@@ -117,6 +129,46 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window?.toolbar = toolbar
+    }
+
+    /// The system's title takes all the free width and pushes items past it to the far side, and a toolbar item
+    /// always gets a glass capsule. So the title and its button are drawn on the title bar itself.
+    /// Window tabs still use the window's title.
+    private func buildTitleBar() {
+        titleLabel.font = .boldSystemFont(ofSize: 15)
+        titleLabel.lineBreakMode = .byTruncatingMiddle
+        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        copyNameButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy Name")
+        copyNameButton.imageScaling = .scaleProportionallyDown
+        copyNameButton.isBordered = false
+        copyNameButton.contentTintColor = .secondaryLabelColor
+        copyNameButton.toolTip = "Copy name"
+        copyNameButton.target = self
+        copyNameButton.action = #selector(copyFolderName(_:))
+        copyNameButton.isHidden = true
+        // The check is narrower than the copy icon, and the title shouldn't shift between them.
+        copyNameButton.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        copyNameButton.heightAnchor.constraint(equalToConstant: 18).isActive = true
+        titleBar.orientation = .horizontal
+        titleBar.spacing = 6
+        titleBar.addArrangedSubview(titleLabel)
+        titleBar.addArrangedSubview(copyNameButton)
+        titleBar.translatesAutoresizingMaskIntoConstraints = true
+        window?.standardWindowButton(.closeButton)?.superview?.addSubview(titleBar)
+        splitController.onResize = { [weak self] in self?.layoutTitleBar() }
+    }
+
+    /// Set by hand and not with constraints, because the title bar moves to a window of its own in full screen.
+    private func layoutTitleBar() {
+        guard let bar = titleBar.superview, let window, let close = window.standardWindowButton(.closeButton),
+              let zoom = window.standardWindowButton(.zoomButton), let pane = contentItem?.viewController.view else { return }
+        // Clears the traffic lights and the sidebar button when the sidebar is hidden.
+        let minX = max(zoom.frame.maxX + Self.sidebarButtonWidth, pane.convert(pane.bounds, to: nil).minX + Self.titleInset)
+        // The mode control is the first of the items at the far side, unless the toolbar moved it to its overflow.
+        let limit = modeControl.window == nil ? bar.bounds.maxX : bar.convert(modeControl.bounds, from: modeControl).minX
+        let fitting = titleBar.fittingSize
+        let frame = NSRect(x: minX, y: close.frame.midY - fitting.height / 2, width: max(0, min(fitting.width, limit - Self.titleInset - minX)), height: fitting.height)
+        if titleBar.frame != frame { titleBar.frame = frame }
     }
 
     // MARK: Inspector
@@ -152,6 +204,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         tab.mode = mode
         window?.title = folder.lastPathComponent
         window?.representedURL = folder
+        titleLabel.stringValue = folder.lastPathComponent
+        titleLabel.toolTip = folder.lastPathComponent
+        copyNameButton.isHidden = false
+        layoutTitleBar()
         modeControl.selectedSegment = mode == .sections ? 0 : 1
         refreshFavoriteItem()
         refreshTabTags()
@@ -163,6 +219,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         tab.folder = nil
         window?.title = "ReelDock"
         window?.representedURL = nil
+        titleLabel.stringValue = "ReelDock"
+        titleLabel.toolTip = nil
+        copyNameButton.isHidden = true
+        layoutTitleBar()
         refreshFavoriteItem()
         refreshTabTags()
         content.display()
@@ -222,6 +282,20 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         guard let folder = tab.folder else { return }
         app.toggleFavorite(folder)
         refreshFavoriteItem()
+    }
+
+    /// Copies the name shown as the window's title. The button shows a check briefly, since nothing else changes.
+    @objc func copyFolderName(_ sender: Any?) {
+        guard let name = tab.folder?.lastPathComponent else { return }
+        NSPasteboard.files.clearContents()
+        NSPasteboard.files.setString(name, forType: .string)
+        copyNameButton.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")
+        copyNameReset?.cancel()
+        copyNameReset = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.2))
+            guard !Task.isCancelled else { return }
+            self?.copyNameButton.image = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy Name")
+        }
     }
 
     @objc func revealInFinder(_ sender: Any?) {
@@ -1244,10 +1318,23 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     func windowDidBecomeKey(_ notification: Notification) {
         refreshFavoriteItem()
+        titleLabel.textColor = .labelColor
     }
 
     func windowDidResignKey(_ notification: Notification) {
         tab.playback.releaseHeldKeys()
+        titleLabel.textColor = .secondaryLabelColor
+    }
+
+    /// Items at the far side move without the window resizing, when the import button appears for one.
+    func windowDidUpdate(_ notification: Notification) {
+        layoutTitleBar()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        // The toolbar places its items in the layout pass that follows.
+        window?.contentView?.superview?.layoutSubtreeIfNeeded()
+        layoutTitleBar()
     }
 
     /// A tab in the background shouldn't keep playing out of sight.
@@ -1261,7 +1348,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     // MARK: Toolbar
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .mode, .flexibleSpace, .importActivity, .importCard, .favorite, .reveal, .inspectorTrackingSeparator, .toggleInspector]
+        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, .mode, .importActivity, .importCard, .favorite, .reveal, .inspectorTrackingSeparator, .toggleInspector]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
@@ -1323,13 +1410,24 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     }
 }
 
+/// Dragging the title still moves the window, as the system's own title does.
+private final class WindowTitleLabel: NSTextField {
+    override var mouseDownCanMoveWindow: Bool { true }
+}
+
 /// Tells a toggle by hand apart from the inspector following the selection.
 private final class WorkspaceSplitViewController: NSSplitViewController {
     var onToggleInspector: (() -> Void)?
+    var onResize: (() -> Void)?
 
     override func toggleInspector(_ sender: Any?) {
         onToggleInspector?()
         super.toggleInspector(sender)
+    }
+
+    override func splitViewDidResizeSubviews(_ notification: Notification) {
+        super.splitViewDidResizeSubviews(notification)
+        onResize?()
     }
 }
 

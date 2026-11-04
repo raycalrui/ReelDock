@@ -167,6 +167,58 @@ final class DebugDriver {
             case "revert": controller.discardImageEdit()
             default: return "unknown"
             }
+        case "projectthumbs":
+            // projectthumbs: times finding each project's thumbnail source and decoding a first frame, one at a time.
+            Task {
+                var lines: [String] = []
+                for project in app.projects {
+                    let start = ContinuousClock.now
+                    let source = ProjectThumbnail.source(in: project.url)
+                    var detail = "none"
+                    switch source {
+                    case .cover(let item): detail = "cover \(item.name)"
+                    case .firstFrame(let item):
+                        let frame = await ThumbnailCache.shared.firstFrame(of: item.url, modified: item.modified, size: 128, scale: 2)
+                        detail = "frame \(item.name) \(frame.map { "\(Int($0.size.width))x\(Int($0.size.height))" } ?? "failed")"
+                    case nil: break
+                    }
+                    lines.append("\(ContinuousClock.now - start) \(project.folderName): \(detail)")
+                }
+                try? lines.joined(separator: "\n").write(to: self.directory.appendingPathComponent("thumbs.txt"), atomically: true, encoding: .utf8)
+            }
+        case "sidebarsnapshot":
+            // sidebarsnapshot|path: draws the sidebar pane alone.
+            func table(in view: NSView) -> NSTableView? {
+                view as? NSTableView ?? view.subviews.lazy.compactMap(table(in:)).first
+            }
+            guard let root = controller.debugSidebarItem?.viewController.view, let view = table(in: root),
+                  let bitmap = view.bitmapImageRepForCachingDisplay(in: view.visibleRect) else { return "no view" }
+            view.cacheDisplay(in: view.visibleRect, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+            return "ok \(bitmap.pixelsWide)x\(bitmap.pixelsHigh) rows=\(view.numberOfRows) rowHeight=\(view.numberOfRows > 8 ? view.rect(ofRow: 8).height : 0)"
+        case "projectstats":
+            return app.projects.map { project in
+                let stats = app.projectStats[project.folderName]
+                return "\(project.folderName)\t\(stats?.fileCount ?? -1)\t\(stats?.size ?? -1)"
+            }.joined(separator: "\n")
+        case "copyname":
+            // copyname: presses the button beside the title if it's showing, and reports it and the pasteboard.
+            let button = controller.debugCopyNameButton
+            if !button.isHidden { button.performClick(nil) }
+            return "hidden=\(button.isHidden) image=\(button.image?.accessibilityDescription ?? "") pasteboard=\(NSPasteboard.files.string(forType: .string) ?? "nil")"
+        case "titlebarframe":
+            // Where the title sits in the window, and whether a click there reaches the button.
+            let bar = controller.debugTitleBar
+            let button = controller.debugCopyNameButton
+            let frame = bar.convert(bar.bounds, to: nil)
+            let center = button.convert(NSPoint(x: button.bounds.midX, y: button.bounds.midY), to: nil)
+            let hit = controller.window?.contentView?.superview?.hitTest(center)
+            return "frame=\(frame) parent=\(bar.superview.map { "\(type(of: $0))" } ?? "nil") buttonHidden=\(button.isHidden) hit=\(hit === button ? "button" : hit.map { "\(type(of: $0))" } ?? "nil") windowWidth=\(controller.window?.frame.width ?? 0)"
+        case "copynamestate":
+            let button = controller.debugCopyNameButton
+            return "hidden=\(button.isHidden) image=\(button.image?.accessibilityDescription ?? "") frame=\(button.window == nil ? "none" : "\(button.convert(button.bounds, to: nil))") window=\(controller.window?.title ?? "")"
+        case "thumbgenerations":
+            return "\(app.thumbnailGenerations)"
         case "inspectorsnapshot":
             // inspectorsnapshot|path: draws the inspector alone, which the window snapshot leaves blank.
             guard let view = controller.debugInspectorItem?.viewController.view,

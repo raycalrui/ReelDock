@@ -166,6 +166,14 @@ Selecting a folder already opens its column, so spring loading uses the same pat
 
 Preview changes a file in place, while this app never overwrites one. Save gives the same result on the file's path, but builds and checks the new version first and moves the original to the Trash, so undo can swap them back. Save Copy is there for when both are wanted. Only formats that hold one flat image can be edited, because writing a PSD or PDF back through ImageIO would lose its layers or pages, and RAW has no writer.
 
+## The window's title is drawn on the title bar
+
+On macOS 26 the system's title takes all the free width in a unified toolbar, so an item meant to sit beside it lands on the far side. A title drawn as a toolbar item keeps the button beside it, but the system puts every item in a glass capsule and AppKit has no public way to remove it, which looked wrong. So the system's title is hidden, and the title and copy button are a plain view added to the title bar, beside the window's standard buttons. It is positioned by hand, not with constraints, because the title bar moves to a window of its own in full screen. Window tabs still read the window's title.
+
+## Project thumbnails use the real first frame
+
+Quick Look picks its own frame from a video, so the first frame comes from `AVAssetImageGenerator` at time zero with no tolerance. Thumbnails stay in memory only, because writing them inside projects is ruled out and regenerating them on launch is cheap enough.
+
 ## Rotating bakes the pixels
 
 Setting the orientation flag would avoid re-encoding a JPEG, but not everything that reads these files honors it, and crop has to re-encode anyway. Saved edits are upright with the flag cleared.

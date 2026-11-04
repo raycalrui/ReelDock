@@ -60,6 +60,12 @@ nonisolated enum ProjectCatalog {
         return DateComponents(calendar: Calendar(identifier: .gregorian), year: year, month: month, day: day).isValidDate
     }
 
+    /// The project folder a path is in, or nil if it isn't inside one.
+    static func projectName(containing path: String, root: String) -> String? {
+        guard path.hasPrefix(root + "/") else { return nil }
+        return path.dropFirst(root.count + 1).split(separator: "/").first.map(String.init)
+    }
+
     static func entry(for url: URL) -> ProjectEntry {
         let name = url.lastPathComponent
         let digits = name.prefix(8)
@@ -108,5 +114,99 @@ nonisolated enum ProjectCatalog {
                     return lhs.folderName.localizedStandardCompare(rhs.folderName) == .orderedAscending
                 }
             }
+    }
+}
+
+/// What a project holds, shown in the project lists.
+nonisolated struct ProjectStats: Hashable, Sendable {
+    let fileCount: Int
+    let size: Int64
+
+    var fileLabel: String { fileCount == 1 ? "1 file" : "\(fileCount) files" }
+
+    /// The size covers everything, to match Finder. The count skips what the browser hides, and a package is one file.
+    static func read(_ folder: URL) -> ProjectStats? {
+        guard (try? folder.checkResourceIsReachable()) == true,
+              let enumerator = FileManager.default.enumerator(
+                at: folder,
+                includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey, .fileSizeKey]
+              ) else { return nil }
+        var fileCount = 0
+        var size: Int64 = 0
+        // Set inside something the count leaves out: a hidden folder or a package.
+        var uncountedLevel: Int?
+        for case let url as URL in enumerator {
+            if let level = uncountedLevel, enumerator.level <= level { uncountedLevel = nil }
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isPackageKey, .fileSizeKey])
+            size += Int64(values?.fileSize ?? 0)
+            guard uncountedLevel == nil else { continue }
+            if url.lastPathComponent.hasPrefix(".") {
+                uncountedLevel = enumerator.level
+            } else if values?.isPackage == true {
+                fileCount += 1
+                uncountedLevel = enumerator.level
+            } else if values?.isRegularFile == true {
+                fileCount += 1
+            }
+        }
+        return ProjectStats(fileCount: fileCount, size: size)
+    }
+}
+
+/// Picks the picture that stands for a project in the project lists.
+nonisolated enum ProjectThumbnail {
+    enum Source: Hashable, Sendable {
+        case cover(FolderItem)
+        case firstFrame(FolderItem)
+    }
+
+    private static let coverKey = "cover"
+    private static let videoKey = "video"
+    /// How far to look through folders inside `3 video`, since real projects can nest deep proxy trees there.
+    private static let videoFolderDepth = 2
+
+    /// `cover 169.jpg` or `cover sc 169.jpg`, but not `cover.jpg` or `cover_01_00_11_69.jpg`.
+    static func isWideCover(_ item: FolderItem) -> Bool {
+        guard !item.isFolder, item.contentType?.conforms(to: .image) == true else { return false }
+        let stem = (item.name as NSString).deletingPathExtension.lowercased()
+        guard stem.hasPrefix(coverKey), stem.hasSuffix("169") else { return false }
+        return stem.dropLast(3).last?.isNumber == false
+    }
+
+    /// A wide cover if there is one, otherwise the first video. Reads only the folders it needs.
+    static func source(in project: URL) -> Source? {
+        guard let sections = try? FolderReader.read(project, showHidden: false) else { return nil }
+        if let folder = sections.first(where: { sectionKey(of: $0) == coverKey }),
+           let cover = (try? FolderReader.read(folder.url, showHidden: false))?.first(where: isWideCover) {
+            return .cover(cover)
+        }
+        guard let folder = sections.first(where: { sectionKey(of: $0) == videoKey }),
+              let video = firstVideo(in: folder.url, depth: videoFolderDepth) else { return nil }
+        return .firstFrame(video)
+    }
+
+    /// The project whose thumbnail a changed directory could affect, or nil.
+    static func projectName(affectedBy directory: String, root: String) -> String? {
+        guard let project = ProjectCatalog.projectName(containing: directory, root: root) else { return nil }
+        let parts = directory.dropFirst(root.count + 1).split(separator: "/").map(String.init)
+        guard parts.count > 1 else { return project }
+        let key = SectionBuilder.numberPrefix(of: parts[1])?.remainder.lowercased()
+        return key == coverKey || key == videoKey ? project : nil
+    }
+
+    private static func sectionKey(of item: FolderItem) -> String? {
+        guard item.isFolder else { return nil }
+        return SectionBuilder.numberPrefix(of: item.name)?.remainder.lowercased()
+    }
+
+    /// Videos beside a folder come before anything inside it.
+    private static func firstVideo(in folder: URL, depth: Int) -> FolderItem? {
+        guard let items = try? FolderReader.read(folder, showHidden: false) else { return nil }
+        if let video = items.first(where: \.isVideo) { return video }
+        guard depth > 0 else { return nil }
+        for item in items where item.isFolder {
+            if let video = firstVideo(in: item.url, depth: depth - 1) { return video }
+        }
+        return nil
     }
 }

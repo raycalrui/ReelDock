@@ -26,6 +26,8 @@ Goal: replace Finder for browsing, with no writes to any user files.
 - [x] Choosing the full-screen display (not exercised on a second display: only one was connected)
 - [x] Smooth backward playback at 1× and 2× (60 frames a second reach the display layer on a real 4K60 HEVC clip, not judged by eye; rotation checked by layer geometry only)
 - [x] New tabs list the projects, with Open Folder kept (scripted, rendering checked off screen)
+- [x] File count and total size in the project lists (unit tested, compared with `find` and `du` on real projects, refresh checked on temporary fixtures, off screen)
+- [x] Project thumbnails in the sidebar and the new-tab list, from a `cover … 169` picture or the first frame of the first video (unit tested; sources and rendering checked read-only on real projects, refresh and the exact first frame checked on temporary fixtures, off screen)
 - [x] Sideways scrolling of a section's columns (scripted with synthetic scroll events, real trackpad not exercised)
 - [x] Drag files out into DaVinci Resolve and Finder (not exercised)
 - [x] Favorites, ordinary folders, and mode switching (scripted, except sidebar clicks and drops)
@@ -81,7 +83,7 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 - [x] Rotate and crop images, saving over the original with it kept in the Trash, or as a copy (unit tested, and scripted on temporary JPEG, PNG, HEIC, and TIFF files, including undo and redo of a save; the crop drag's geometry is unit tested, but a real mouse drag and real shortcuts not exercised)
 - [x] Read tags and colors, and show them on rows, section headers, favorites, and the project list (colors read from real projects, rendering scripted on fixtures, sidebar not seen on screen)
 - [x] Write tags on single and multiple selections, with Finder's color row and undo (scripted on fixtures through the palette's own handler, menus not seen on screen, not yet checked in Finder)
-- [x] Show tag dots in front of names on projects, favorites, the new-tab list, and tabs (tabs and the new-tab list seen in snapshots, sidebar not seen on screen)
+- [x] Show tag dots after names in the project lists, and in front of them on favorites and tabs (project lists seen in snapshots, not on screen)
 - [x] Filter projects by tag (filtering scripted and unit tested, the menu not exercised or seen on screen)
 - [x] New project from template (scripted on temporary fixtures, including a taken name, a bad date, no template, and a card panel; the Return key and the sheet's look not checked on screen)
 

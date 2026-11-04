@@ -103,7 +103,7 @@ final class CardMonitor {
 
 /// System sounds, so nothing extra ships with the app.
 enum CardSound: String {
-    case inserted = "Pop"
+    case inserted = "Submarine"
     case ejected = "Glass"
 
     func play() {

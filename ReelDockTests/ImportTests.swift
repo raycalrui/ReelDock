@@ -154,16 +154,16 @@ private struct ImportFixture {
         CardClip(url: URL(fileURLWithPath: "/card/\(name)"), name: name, size: 1, time: ClipTime(recorded: recorded))
     }
 
-    @Test func splitsByDayAndHourLongGapsNewestFirst() {
+    @Test func splitsByDayAndHourLongGapsOldestFirst() {
         let groups = ClipGrouping.groups([
             clip("a", "2026-11-02T10:00:00+08:00"),
             clip("b", "2026-11-02T10:50:00+08:00"),
             clip("c", "2026-11-02T12:00:00+08:00"),
             clip("d", "2026-11-03T09:00:00+08:00"),
         ])
-        #expect(groups.map { $0.clips.map(\.name) } == [["d"], ["c"], ["a", "b"]])
-        #expect(groups[2].title == "2026-11-02  10:00 – 10:50")
-        #expect(groups[0].title == "2026-11-03  09:00")
+        #expect(groups.map { $0.clips.map(\.name) } == [["a", "b"], ["c"], ["d"]])
+        #expect(groups[0].title == "2026-11-02  10:00 – 10:50")
+        #expect(groups[2].title == "2026-11-03  09:00")
     }
 
     @Test func midnightStartsANewGroup() {

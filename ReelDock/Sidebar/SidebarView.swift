@@ -185,21 +185,38 @@ struct SidebarView: View {
     }
 
     private func projectRow(_ project: ProjectEntry) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            LeadingTagDots(tags: project.tags)
+        HStack(spacing: 6) {
+            ProjectThumbnailView(project: project, generation: app.thumbnailGenerations[project.folderName, default: 0], width: 48)
             VStack(alignment: .leading, spacing: 1) {
-                Text(project.title)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let date = project.displayDate {
-                    Text(date)
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Text(project.title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    TagDots(tags: project.tags)
                 }
+                HStack(spacing: 6) {
+                    if let date = project.displayDate {
+                        Text(date)
+                            .fixedSize()
+                    }
+                    Spacer(minLength: 0)
+                    if let stats = app.projectStats[project.folderName] {
+                        // The sidebar can be narrow, so the count goes first and then the size.
+                        ViewThatFits(in: .horizontal) {
+                            Text("\(stats.fileLabel) · \(ImportFormat.bytes(stats.size))")
+                            Text(ImportFormat.bytes(stats.size))
+                            Color.clear.frame(width: 0, height: 0)
+                        }
+                    }
+                }
+                .lineLimit(1)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
+        .task { app.loadStats(for: project) }
         .overlay {
             RowContextMenu { [weak controller] in controller?.folderContextMenu(for: project.url) }
                 .padding(.horizontal, -Self.rowInsetX)

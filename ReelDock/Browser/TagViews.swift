@@ -133,20 +133,6 @@ private struct TagDot: View {
     }
 }
 
-/// Dots in front of a title. The space stays when there are none, so titles in a list line up.
-struct LeadingTagDots: View {
-    let tags: [FinderTag]
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            Color.clear.frame(width: 10, height: 10)
-            TagDots(tags: tags)
-        }
-        // Centers the dots on the first line of text.
-        .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-    }
-}
-
 /// The inspector's row: the selection's tags by name, and a button to change them.
 struct TagRow: View {
     weak var controller: WorkspaceWindowController?

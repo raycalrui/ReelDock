@@ -277,7 +277,7 @@ nonisolated struct ClipGroup: Identifiable, Hashable, Sendable {
 nonisolated enum ClipGrouping {
     static let gap: TimeInterval = 60 * 60
 
-    /// Splits by day and by gaps over an hour. Newest shoot first, clips in shooting order within it.
+    /// Splits by day and by gaps over an hour. Shoots and the clips within them run oldest to newest.
     static func groups(_ clips: [CardClip]) -> [ClipGroup] {
         let dated = clips.filter { $0.time != nil }.sorted { lhs, rhs in
             if lhs.time!.date != rhs.time!.date { return lhs.time!.date < rhs.time!.date }
@@ -293,7 +293,7 @@ nonisolated enum ClipGrouping {
                 result.append([clip])
             }
         }
-        var groups = result.reversed().map(ClipGroup.init(clips:))
+        var groups = result.map(ClipGroup.init(clips:))
         let undated = clips.filter { $0.time == nil }
         if !undated.isEmpty { groups.append(ClipGroup(clips: undated)) }
         return groups
