@@ -226,6 +226,18 @@ final class DebugDriver {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
             return "ok \(bitmap.pixelsWide)x\(bitmap.pixelsHigh)"
+        case "overviewsnapshot":
+            // overviewsnapshot|path: draws what's inside the overview's scroll view, which a snapshot of the panel leaves blank.
+            func findScroll(_ view: NSView?) -> NSScrollView? {
+                guard let view else { return nil }
+                return (view as? NSScrollView) ?? view.subviews.lazy.compactMap(findScroll).first
+            }
+            guard let scroll = findScroll(controller.debugInspectorItem?.viewController.view) else { return "no scroll view" }
+            let target = scroll.contentView
+            guard let bitmap = target.bitmapImageRepForCachingDisplay(in: target.bounds) else { return "no bitmap" }
+            target.cacheDisplay(in: target.bounds, to: bitmap)
+            try? bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+            return "scroll=\(scroll.frame) clip=\(target.bounds) document=\(scroll.documentView?.frame ?? .zero) subviews=\(scroll.documentView?.subviews.count ?? 0)"
         case "previewsnapshot":
             // previewsnapshot|path: draws the full-screen preview's window.
             guard let view = NSApp.windows.first(where: { $0.level == .statusBar })?.contentView,

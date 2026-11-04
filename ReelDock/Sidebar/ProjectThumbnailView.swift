@@ -4,7 +4,7 @@ import SwiftUI
 /// A project's 16:9 picture in the project lists. Projects with nothing to show keep the same space, so titles line up.
 struct ProjectThumbnailView: View {
     /// One size for every list, so they share the same cached images.
-    private static let loadSize: CGFloat = 128
+    static let listSize: CGFloat = 128
     /// What each project last showed, so a row scrolled back into view doesn't flash empty.
     private static let shown = NSCache<NSString, NSImage>()
 
@@ -12,17 +12,21 @@ struct ProjectThumbnailView: View {
     /// Changes when the project's cover or video folder does.
     let generation: Int
     let width: CGFloat
+    let loadSize: CGFloat
 
     @Environment(\.displayScale) private var displayScale
     @State private var image: NSImage?
     @State private var loadingID: String?
 
-    init(project: ProjectEntry, generation: Int, width: CGFloat) {
+    init(project: ProjectEntry, generation: Int, width: CGFloat, loadSize: CGFloat = Self.listSize) {
         self.project = project
         self.generation = generation
         self.width = width
-        _image = State(initialValue: Self.shown.object(forKey: project.id as NSString))
+        self.loadSize = loadSize
+        _image = State(initialValue: Self.shown.object(forKey: "\(project.id)|\(loadSize)" as NSString))
     }
+
+    private var cacheKey: NSString { "\(project.id)|\(loadSize)" as NSString }
 
     var body: some View {
         ZStack {
@@ -49,16 +53,16 @@ struct ProjectThumbnailView: View {
         switch source {
         case .cover(let cover):
             loadingID = cover.id
-            if let cached = ThumbnailCache.shared.cached(cover.url, modified: cover.modified, size: Self.loadSize) {
+            if let cached = ThumbnailCache.shared.cached(cover.url, modified: cover.modified, size: loadSize) {
                 show(cached)
                 return
             }
-            ThumbnailCache.shared.request(cover.url, modified: cover.modified, size: Self.loadSize, scale: displayScale) { picture in
+            ThumbnailCache.shared.request(cover.url, modified: cover.modified, size: loadSize, scale: displayScale) { picture in
                 if loadingID == cover.id { show(picture) }
             }
         case .firstFrame(let video):
             loadingID = video.id
-            let frame = await ThumbnailCache.shared.firstFrame(of: video.url, modified: video.modified, size: Self.loadSize, scale: displayScale)
+            let frame = await ThumbnailCache.shared.firstFrame(of: video.url, modified: video.modified, size: loadSize, scale: displayScale)
             if loadingID == video.id, !Task.isCancelled { show(frame) }
         case nil:
             loadingID = nil
@@ -69,9 +73,9 @@ struct ProjectThumbnailView: View {
     private func show(_ picture: NSImage?) {
         image = picture
         if let picture {
-            Self.shown.setObject(picture, forKey: project.id as NSString)
+            Self.shown.setObject(picture, forKey: cacheKey)
         } else {
-            Self.shown.removeObject(forKey: project.id as NSString)
+            Self.shown.removeObject(forKey: cacheKey)
         }
     }
 }

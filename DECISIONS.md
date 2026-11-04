@@ -142,9 +142,11 @@ Replacing a running app safely, and checking that a download really came from us
 
 The panel exists only while a card is present, so it opens on insertion and closes when the last card leaves. Only a newly seen card opens it, including one already inserted when the app launches, so closing the panel stays closed until a card is inserted again. It opens in the front window only.
 
-## The inspector follows the selection
+## The inspector stays open
 
-An empty inspector only takes width from the browser, so it hides when nothing is selected and returns with a selection. Hiding it by hand with something selected is a choice about that tab, so it stays hidden until it's shown again. The window's minimum width now fits all three panes, so showing the inspector doesn't have to resize the window.
+It used to show with a selection and hide without one, so that an empty panel wouldn't take width from the browser. In use the browser kept changing width as the selection changed, which Raycal found annoying. So it stays open, and with nothing selected it shows what the open folder holds, which puts the space to use. The toolbar button still hides it, for one tab, until the button, Space, or an image edit brings it back.
+
+Counting a folder means walking all of it, and an opened folder needn't be a project, so the count can be cancelled and waits for changes to settle.
 
 ## Dragging uses Finder's rules, and paste's machinery
 

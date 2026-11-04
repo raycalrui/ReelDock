@@ -6,6 +6,7 @@ enum InspectorPreview {
 }
 
 struct InspectorView: View {
+    let app: AppModel
     let tab: TabModel
     weak var controller: WorkspaceWindowController?
 
@@ -13,7 +14,12 @@ struct InspectorView: View {
         Group {
             switch tab.selection.count {
             case 0:
-                placeholder
+                if let folder = tab.folder ?? app.projectRootURL {
+                    FolderOverview(url: folder, app: app, tab: tab, controller: controller)
+                        .id(folder.path)
+                } else {
+                    placeholder
+                }
             case 1:
                 SingleItemInspector(item: tab.selection[0], tab: tab, controller: controller)
                     .id(tab.selection[0].id)
@@ -31,7 +37,7 @@ struct InspectorView: View {
     }
 }
 
-private enum InspectorFormat {
+enum InspectorFormat {
     static let bytes: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file

@@ -1340,6 +1340,33 @@ private struct Fixture {
         #expect(ProjectStats.read(folder) == ProjectStats(fileCount: 2, size: 120))
     }
 
+    @Test func aSummaryBreaksTheTotalDownByTopLevelFolder() throws {
+        let folder = try makeFolder([
+            "10 later/a.mov": 5, "2 video/FX3/b.mp4": 20, "2 video/c.mp4": 3, "2 video/.DS_Store": 7,
+            "3 picture/d.png": 4, "4 audio/e.wav": 2, "empty/.keep": 1, "loose.txt": 9, ".hidden/f.mp4": 100,
+        ])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let summary = try #require(FolderSummary.read(folder))
+        #expect(summary.total == ProjectStats(fileCount: 6, size: 151))
+        #expect(summary.sections.map(\.name) == ["2 video", "3 picture", "4 audio", "10 later", "empty"])
+        #expect(summary.sections[0].stats == ProjectStats(fileCount: 2, size: 30))
+        #expect(summary.sections[4].stats == ProjectStats(fileCount: 0, size: 1))
+        #expect(summary.outsideSections == ProjectStats(fileCount: 1, size: 109))
+        #expect(summary.videos == 3)
+        #expect(summary.pictures == 1)
+        #expect(summary.audio == 1)
+    }
+
+    @Test func aCancelledSummaryStops() async throws {
+        let folder = try makeFolder(["a.mp4": 1])
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let scan = Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return FolderSummary.read(folder)
+        }
+        #expect(await scan.value == nil)
+    }
+
     @Test func aPackageCountsAsOneFile() throws {
         let folder = try makeFolder(["notes.rtfd/TXT.rtf": 5, "notes.rtfd/image.png": 6, "after.mp4": 1])
         defer { try? FileManager.default.removeItem(at: folder) }

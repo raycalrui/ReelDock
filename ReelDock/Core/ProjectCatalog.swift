@@ -124,32 +124,91 @@ nonisolated struct ProjectStats: Hashable, Sendable {
 
     var fileLabel: String { fileCount == 1 ? "1 file" : "\(fileCount) files" }
 
-    /// The size covers everything, to match Finder. The count skips what the browser hides, and a package is one file.
     static func read(_ folder: URL) -> ProjectStats? {
+        FolderSummary.read(folder)?.total
+    }
+}
+
+/// What a folder holds, shown in the inspector when nothing is selected.
+nonisolated struct FolderSummary: Hashable, Sendable {
+    struct Section: Hashable, Sendable, Identifiable {
+        let name: String
+        let stats: ProjectStats
+
+        var id: String { name }
+    }
+
+    let total: ProjectStats
+    /// The folders at its top level, in Finder's name order.
+    let sections: [Section]
+    let videos: Int
+    let pictures: Int
+    let audio: Int
+    let created: Date?
+    let modified: Date?
+
+    /// What's left of the total outside the sections: loose files, and anything hidden at the top level.
+    var outsideSections: ProjectStats {
+        ProjectStats(
+            fileCount: total.fileCount - sections.map(\.stats.fileCount).reduce(0, +),
+            size: total.size - sections.map(\.stats.size).reduce(0, +)
+        )
+    }
+
+    /// The size covers everything, to match Finder. The count skips what the browser hides, and a package is one file.
+    /// Returns nil if cancelled, since an opened folder can be far larger than a project.
+    static func read(_ folder: URL) -> FolderSummary? {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isPackageKey, .fileSizeKey, .contentTypeKey]
         guard (try? folder.checkResourceIsReachable()) == true,
-              let enumerator = FileManager.default.enumerator(
-                at: folder,
-                includingPropertiesForKeys: [.isRegularFileKey, .isPackageKey, .fileSizeKey]
-              ) else { return nil }
+              let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: Array(keys)) else { return nil }
         var fileCount = 0
         var size: Int64 = 0
+        var videos = 0
+        var pictures = 0
+        var audio = 0
+        var sections: [(name: String, fileCount: Int, size: Int64)] = []
+        var section: Int?
         // Set inside something the count leaves out: a hidden folder or a package.
         var uncountedLevel: Int?
         for case let url as URL in enumerator {
+            if Task.isCancelled { return nil }
             if let level = uncountedLevel, enumerator.level <= level { uncountedLevel = nil }
-            let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .isPackageKey, .fileSizeKey])
-            size += Int64(values?.fileSize ?? 0)
+            let values = try? url.resourceValues(forKeys: keys)
+            let isHidden = url.lastPathComponent.hasPrefix(".")
+            if enumerator.level == 1 {
+                section = nil
+                if values?.isDirectory == true, values?.isPackage != true, !isHidden {
+                    sections.append((url.lastPathComponent, 0, 0))
+                    section = sections.count - 1
+                }
+            }
+            let bytes = Int64(values?.fileSize ?? 0)
+            size += bytes
+            if let section { sections[section].size += bytes }
             guard uncountedLevel == nil else { continue }
-            if url.lastPathComponent.hasPrefix(".") {
-                uncountedLevel = enumerator.level
-            } else if values?.isPackage == true {
-                fileCount += 1
-                uncountedLevel = enumerator.level
-            } else if values?.isRegularFile == true {
-                fileCount += 1
+            let isPackage = values?.isPackage == true
+            if isHidden || isPackage { uncountedLevel = enumerator.level }
+            guard !isHidden, isPackage || values?.isRegularFile == true else { continue }
+            fileCount += 1
+            if let section { sections[section].fileCount += 1 }
+            if let type = values?.contentType {
+                if type.conforms(to: .movie) { videos += 1 }
+                else if type.conforms(to: .image) { pictures += 1 }
+                else if type.conforms(to: .audio) { audio += 1 }
             }
         }
-        return ProjectStats(fileCount: fileCount, size: size)
+        let dates = try? folder.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+        return FolderSummary(
+            total: ProjectStats(fileCount: fileCount, size: size),
+            sections: sections
+                .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+                .map { Section(name: $0.name, stats: ProjectStats(fileCount: $0.fileCount, size: $0.size)) },
+            videos: videos,
+            pictures: pictures,
+            audio: audio,
+            created: dates?.creationDate,
+            modified: dates?.contentModificationDate
+        )
     }
 }
 

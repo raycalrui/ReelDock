@@ -27,16 +27,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     private var contentItem: NSSplitViewItem?
     private var inspectorItem: NSSplitViewItem?
     private var inspectorObservation: NSKeyValueObservation?
-    /// Hidden by hand with something selected, so selecting more doesn't bring it back.
-    private var inspectorStaysHidden = false
-    private var pendingInspectorChange: Task<Void, Never>?
     private var lastDropCheck: (sequence: Int, folder: URL, mask: NSDragOperation, operation: NSDragOperation)?
     private var keyMonitor: Any?
     private var fullScreenPreview: FullScreenPreview?
     private static let defaultContentMinimumWidth: CGFloat = 420
     private static let defaultInspectorWidth: CGFloat = 440
-    /// A delete or a refresh can clear the selection just before the next one, and that shouldn't flash the inspector.
-    private static let inspectorHideDelay: Duration = .milliseconds(200)
     private static let titleInset: CGFloat = 20
     private static let sidebarButtonWidth: CGFloat = 60
     #if DEBUG
@@ -63,8 +58,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         )
         window.tabbingMode = .automatic
         window.tabbingIdentifier = "cc.raycal.ReelDock.workspace"
-        // Room for all three panes, so the inspector showing with a selection never has to resize the window.
-        window.minSize = NSSize(width: 900, height: 480)
+        // Room for all three panes.
+        window.minSize = NSSize(width: 920, height: 480)
         window.isRestorable = false
         window.toolbarStyle = .unified
         window.titleVisibility = .hidden
@@ -81,9 +76,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         if !window.setFrameUsingName("ReelDockWorkspace") { window.center() }
         window.setFrameAutosaveName("ReelDockWorkspace")
         installKeyMonitor()
-        inspectorItem?.isCollapsed = true
-        tab.onSelectionChange = { [weak self] in self?.selectionDidChange() }
-        splitController.onToggleInspector = { [weak self] in self?.inspectorWasToggled() }
+        // The split view's saved state could otherwise bring back a hidden inspector.
+        inspectorItem?.isCollapsed = false
 
         content.display()
     }
@@ -103,7 +97,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         contentItem.minimumThickness = Self.defaultContentMinimumWidth
         self.contentItem = contentItem
 
-        let inspectorHost = NSHostingController(rootView: InspectorView(tab: tab, controller: self))
+        let inspectorHost = NSHostingController(rootView: InspectorView(app: app, tab: tab, controller: self))
         inspectorHost.sizingOptions = []
         inspectorHost.view.setFrameSize(NSSize(width: Self.defaultInspectorWidth, height: 800))
         let inspectorItem = NSSplitViewItem(inspectorWithViewController: inspectorHost)
@@ -173,28 +167,10 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     // MARK: Inspector
 
-    /// The inspector shows with a selection and hides without one.
-    /// Never in the same turn, because this runs inside the table's selection callback, which mustn't resize the table.
-    private func selectionDidChange() {
-        pendingInspectorChange?.cancel()
-        let hasSelection = !tab.selection.isEmpty
-        guard !hasSelection || !inspectorStaysHidden else { return }
-        pendingInspectorChange = Task { [weak self] in
-            if !hasSelection { try? await Task.sleep(for: Self.inspectorHideDelay) }
-            guard !Task.isCancelled else { return }
-            self?.setInspectorCollapsed(!hasSelection)
-        }
-    }
-
-    /// Runs before the toggle takes effect. Hiding it with nothing selected is where it's headed anyway.
-    private func inspectorWasToggled() {
-        pendingInspectorChange?.cancel()
-        inspectorStaysHidden = inspectorItem?.isCollapsed == false && !tab.selection.isEmpty
-    }
-
-    private func setInspectorCollapsed(_ collapsed: Bool) {
-        guard let inspectorItem, inspectorItem.isCollapsed != collapsed else { return }
-        inspectorItem.animator().isCollapsed = collapsed
+    /// It stays open whatever is selected. Only the toolbar button hides it, and asking to play or edit brings it back.
+    private func showInspector() {
+        guard let inspectorItem, inspectorItem.isCollapsed else { return }
+        inspectorItem.animator().isCollapsed = false
     }
 
     // MARK: Showing folders
@@ -1016,10 +992,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         }
         guard event.type == .keyDown, !tab.selection.isEmpty else { return false }
         if !event.isARepeat {
-            if !inFullScreen, inspectorItem?.isCollapsed == true {
-                inspectorStaysHidden = false
-                setInspectorCollapsed(false)
-            }
+            if !inFullScreen { showInspector() }
             if tab.playback.canPlay {
                 tab.playback.togglePlay()
             }
@@ -1037,10 +1010,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     private func imageEditSession() -> ImageEditSession? {
         if let session = tab.imageEdit { return session }
         guard tab.selection.count == 1, Self.canEdit(tab.selection[0]) else { return nil }
-        if inspectorItem?.isCollapsed == true {
-            inspectorStaysHidden = false
-            setInspectorCollapsed(false)
-        }
+        showInspector()
         let session = ImageEditSession(url: tab.selection[0].url)
         session.onError = { [weak self] in self?.showFileError("Can't edit this image", $0) }
         tab.imageEdit = session
@@ -1415,15 +1385,9 @@ private final class WindowTitleLabel: NSTextField {
     override var mouseDownCanMoveWindow: Bool { true }
 }
 
-/// Tells a toggle by hand apart from the inspector following the selection.
+/// Keeps the title on the title bar lined up with the panes.
 private final class WorkspaceSplitViewController: NSSplitViewController {
-    var onToggleInspector: (() -> Void)?
     var onResize: (() -> Void)?
-
-    override func toggleInspector(_ sender: Any?) {
-        onToggleInspector?()
-        super.toggleInspector(sender)
-    }
 
     override func splitViewDidResizeSubviews(_ notification: Notification) {
         super.splitViewDidResizeSubviews(notification)

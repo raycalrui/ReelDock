@@ -13,10 +13,8 @@ final class TabModel {
             if let imageEdit, selection.count != 1 || selection[0].url.path != imageEdit.url.path {
                 self.imageEdit = nil
             }
-            onSelectionChange?()
         }
     }
-    @ObservationIgnored var onSelectionChange: (() -> Void)?
     let playback = PlaybackController()
     var imageEdit: ImageEditSession?
     /// By file path, so marks survive selecting something else for a moment.
@@ -26,6 +24,10 @@ final class TabModel {
     var projectTagFilter: String?
     var isImportPanelVisible = false
     var importCardID: String?
+    /// Counts changes anywhere inside the open folder.
+    var folderChanges = 0
+    /// So coming back to the overview shows its last numbers while it recounts.
+    @ObservationIgnored var lastSummary: (path: String, summary: FolderSummary)?
 }
 
 enum ImportTarget {
@@ -46,6 +48,8 @@ final class AppModel {
     private(set) var thumbnailGenerations: [String: Int] = [:]
     /// What each project holds, by folder name. Filled in as rows ask for it.
     private(set) var projectStats: [String: ProjectStats] = [:]
+    /// Counts changes anywhere inside the projects folder.
+    private(set) var rootChanges = 0
     @ObservationIgnored private var statsTasks: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var tagsOnThisMac: [FinderTag] = []
     @ObservationIgnored let partFiles: PartFileRegistry
@@ -146,6 +150,7 @@ final class AppModel {
             if change.needsFullRescan || change.rootChanged || change.directories.contains(path) {
                 self?.reloadProjects()
             }
+            self?.rootChanges &+= 1
             self?.noteThumbnailChanges(change, root: path)
             self?.noteStatsChanges(change, root: path)
         }

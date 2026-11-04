@@ -336,6 +336,7 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
 
     private func handle(_ change: FolderWatcher.Change) {
         guard let folder = tab.folder else { return }
+        tab.folderChanges &+= 1
         windowController?.refreshTabTags()
         if change.rootChanged, !FileManager.default.fileExists(atPath: folder.path) {
             windowController?.folderDidDisappear()

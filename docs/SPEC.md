@@ -33,7 +33,8 @@ Status: draft for review. Milestone 1 is implemented and awaiting hands-on accep
 - **Clicking anywhere on a section's header** toggles it, except on its buttons. A maximize button gives that section most of the height, and pressing it again restores the layout. Heights and collapsed states are remembered by section name, so `3 video` behaves alike across projects.
 - **Selection** is one per tab, across all sections. Selecting in another section clears the previous selection.
 - **The inspector** is shared. It replaces Finder's per-browser preview column, which would not fit in a short section. It is 440 pt wide by default and can be dragged from 280 to 760 pt.
-- **The inspector follows the selection:** it shows when something is selected and hides when nothing is, after a short delay so that a delete or a refresh doesn't flash it. Hiding it by hand with something selected keeps it hidden in that tab until it's shown by hand or with Space.
+- **The inspector stays open.** Selecting or deselecting never shows or hides it. The toolbar button hides it for that tab, until the button, Space, or an image edit brings it back.
+- **With nothing selected,** the inspector shows the open folder: a project's thumbnail, its total size and file count, how many are videos, pictures, and audio, each top-level folder's count and size, and its dates. On the new-tab page it shows the same totals for the projects folder. The numbers recount after changes settle, and a count of a very large folder stops when something else is shown.
 - **A section's columns scroll sideways** with a two-finger swipe or Shift and a mouse wheel, even with the pointer over a column.
 
 ## 2. Folders and sections
