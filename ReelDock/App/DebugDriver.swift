@@ -783,6 +783,15 @@ final class DebugDriver {
                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no view" }
             view.cacheDisplay(in: view.bounds, to: rep)
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+        case "contextmenu":
+            // contextmenu|section title|column index|row name|item title: selects the row and lists its menu, or runs one item.
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0],
+                  let row = column.items.firstIndex(where: { $0.name == parts[3] }) else { return "not found" }
+            column.tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            let menu = column.contextMenu()
+            guard let title = parts[safe: 4] else { return menu.items.map { $0.isSeparatorItem ? "-" : $0.title }.joined(separator: " | ") }
+            guard let item = menu.items.first(where: { $0.title == title }), let action = item.action else { return "no such item" }
+            return "performed=\(NSApp.sendAction(action, to: item.target, from: item))"
         case "menu":
             // menu|new, rename, or trash: goes through validation, as the menu does.
             let actions: [String: Selector] = [

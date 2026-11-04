@@ -45,6 +45,7 @@ Finder 在两件事上很慢：
 - Create a project from the template folder, named `YYYYMMDD_name`.<br>用模板文件夹新建项目，命名为 `YYYYMMDD_name`。
 - Trim MP4 and MOV clips with in and out points, and rotate them instantly, without re-encoding.<br>用入点和出点剪辑 MP4 和 MOV 片段，也能即时旋转，都不用重新编码。
 - Rotate and crop JPEG, PNG, HEIC, and TIFF images. Saving keeps the original in the Trash, or writes a copy beside it.<br>旋转和裁剪 JPEG、PNG、HEIC、TIFF 图片。保存时原文件进废纸篓，也可以在旁边另存一份。
+- Create a Traditional Chinese version of an SRT subtitle from its context menu.<br>在 SRT 字幕的右键菜单里一键创建繁体中文版本。
 
 **Card import / 拷卡**
 

@@ -704,6 +704,34 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         finishTrash(moved: moved, failure: failure)
     }
 
+    /// Keeps going past a file that fails, and undo sends what was made to the Trash.
+    func createTraditionalVersions(of urls: [URL]) async -> [URL] {
+        guard !urls.contains(where: app.isBusy) else {
+            showFileError("Can't create the Traditional Chinese version", FileOperationError.importing)
+            return []
+        }
+        let (created, failure) = await Task.detached(priority: .userInitiated) {
+            var created: [URL] = []
+            var failure: String?
+            for url in urls {
+                do {
+                    created.append(try SubtitleConverter.createTraditionalVersion(of: url))
+                } catch {
+                    failure = failure ?? error.localizedDescription
+                }
+            }
+            return (created, failure)
+        }.value
+        if !created.isEmpty {
+            window?.undoManager?.registerUndo(withTarget: self) { target in
+                target.moveToTrashNow(created)
+            }
+            window?.undoManager?.setActionName("Create Traditional Chinese Version")
+        }
+        if let failure { showFileError("Can't create the Traditional Chinese version", message: failure) }
+        return created
+    }
+
     /// Undo and redo must register their opposite before they return.
     private func moveToTrashNow(_ urls: [URL]) {
         guard !urls.contains(where: app.isBusy) else {

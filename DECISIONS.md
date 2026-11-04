@@ -187,3 +187,7 @@ Trimming is a passthrough export that copies the marked samples and uses an edit
 ## Rotating a video changes the file in place
 
 Rotation only needs a different display matrix in each video track's header. Patching those few bytes is instant at any file size, leaves the media untouched, and is undone by turning back, so a copy would only add a wait and fill the Trash. This is the one edit that writes to an existing file, and it never runs on a card or while the file is busy.
+
+## Subtitles convert with ICU, not the Services menu
+
+The system's "Convert Text to Traditional Chinese" service declares `NSTextTransformation = Simplified-Traditional`, which is the same ICU transform `applyingTransform` offers. On 15 real subtitle pairs made by hand through the service, both produced no differences. So the app calls the transform directly, which needs no pasteboard or service process and can run off the main thread. It maps characters without context, so it shares the service's limits: `软件` stays `軟件`, not `軟體`, and `里` can stay wrong.

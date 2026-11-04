@@ -456,6 +456,10 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         await windowController?.moveToTrash(urls)
     }
 
+    func createTraditionalVersions(of urls: [URL]) async -> [URL] {
+        await windowController?.createTraditionalVersions(of: urls) ?? []
+    }
+
     func addTagItems(to menu: NSMenu, for urls: [URL]) {
         windowController?.addTagItems(to: menu, for: urls)
     }

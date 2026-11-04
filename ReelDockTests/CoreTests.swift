@@ -1316,6 +1316,94 @@ private struct Fixture {
     }
 }
 
+@Suite struct SubtitleConverterTests {
+    private func subtitle(_ name: String) -> FolderItem {
+        FolderItem(url: URL(fileURLWithPath: "/tmp/\(name)"), name: name, isFolder: false, size: nil, modified: nil, contentType: nil)
+    }
+
+    private func makeFolder() throws -> URL {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
+    @Test(arguments: [
+        ("Subtitle sc.srt", "Subtitle tc.srt"),
+        ("Subtitle SC.srt", "Subtitle TC.srt"),
+        ("Subtitle sc1.srt", "Subtitle tc1.srt"),
+        ("Subtitle_sc.SRT", "Subtitle_tc.SRT"),
+        ("sc.srt", "tc.srt"),
+        ("Subtitle.srt", "Subtitle tc.srt"),
+        ("misc.srt", "misc tc.srt"),
+        ("sc final.srt", "sc final tc.srt"),
+    ])
+    func namesTheTraditionalVersion(name: String, expected: String) {
+        #expect(SubtitleConverter.traditionalName(for: name, attempt: 0) == expected)
+    }
+
+    @Test func aTakenNameGetsANumber() {
+        #expect(SubtitleConverter.traditionalName(for: "Subtitle sc.srt", attempt: 1) == "Subtitle tc 2.srt")
+        #expect(SubtitleConverter.traditionalName(for: "Subtitle.srt", attempt: 2) == "Subtitle tc 3.srt")
+    }
+
+    @Test func offeredOnSubtitlesThatArentTraditionalAlready() {
+        #expect(SubtitleConverter.canConvert(subtitle("Subtitle sc.srt")))
+        #expect(SubtitleConverter.canConvert(subtitle("Subtitle.SRT")))
+        #expect(SubtitleConverter.canConvert(subtitle("etc.srt")))
+        #expect(!SubtitleConverter.canConvert(subtitle("Subtitle tc.srt")))
+        #expect(!SubtitleConverter.canConvert(subtitle("Subtitle TC1.srt")))
+        #expect(!SubtitleConverter.canConvert(subtitle("Subtitle sc.txt")))
+    }
+
+    @Test func convertsTheTextAndLeavesEverythingElseAlone() throws {
+        let source = "1\r\n00:00:01,000 --> 00:00:02,000\r\n发现头发后面\n\n2\n00:00:03,000 --> 00:00:04,000\nHello 系统\n"
+        let expected = "1\r\n00:00:01,000 --> 00:00:02,000\r\n發現頭髮後面\n\n2\n00:00:03,000 --> 00:00:04,000\nHello 系統\n"
+        #expect(try SubtitleConverter.convert(Data(source.utf8), name: "a") == Data(expected.utf8))
+    }
+
+    @Test func keepsTheEncodingAndByteOrderMark() throws {
+        let bom = Data([0xEF, 0xBB, 0xBF])
+        #expect(try SubtitleConverter.convert(bom + Data("发".utf8), name: "a") == bom + Data("發".utf8))
+        for (mark, encoding) in [(Data([0xFF, 0xFE]), String.Encoding.utf16LittleEndian), (Data([0xFE, 0xFF]), .utf16BigEndian)] {
+            let source = mark + "发\n".data(using: encoding)!
+            #expect(try SubtitleConverter.convert(source, name: "a") == mark + "發\n".data(using: encoding)!)
+        }
+    }
+
+    @Test func refusesOtherEncodings() {
+        // 发 in GB18030.
+        #expect(throws: SubtitleConverterError.unknownEncoding("a.srt")) {
+            try SubtitleConverter.convert(Data([0xB7, 0xA2]), name: "a.srt")
+        }
+    }
+
+    @Test func writesBesideTheSourceWithoutReplacingAnything() throws {
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = folder.appendingPathComponent("Subtitle sc.srt")
+        let taken = folder.appendingPathComponent("Subtitle tc.srt")
+        try Data("发".utf8).write(to: source)
+        try Data("keep".utf8).write(to: taken)
+
+        let created = try SubtitleConverter.createTraditionalVersion(of: source)
+
+        #expect(created.lastPathComponent == "Subtitle tc 2.srt")
+        #expect(try Data(contentsOf: created) == Data("發".utf8))
+        #expect(try Data(contentsOf: source) == Data("发".utf8))
+        #expect(try Data(contentsOf: taken) == Data("keep".utf8))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).count == 3)
+    }
+
+    @Test func aFailureLeavesNothingBehind() throws {
+        let folder = try makeFolder()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let source = folder.appendingPathComponent("Subtitle sc.srt")
+        try Data([0xB7, 0xA2]).write(to: source)
+        #expect(throws: SubtitleConverterError.self) { try SubtitleConverter.createTraditionalVersion(of: source) }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == ["Subtitle sc.srt"])
+    }
+}
+
 @Suite struct ProjectStatsTests {
     private func makeFolder(_ files: [String: Int]) throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

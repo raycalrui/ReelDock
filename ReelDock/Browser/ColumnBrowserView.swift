@@ -12,6 +12,7 @@ protocol BrowserHost: AnyObject {
     func createFolder(in folder: URL) -> URL?
     func renameItem(at url: URL, to name: String) -> URL?
     func moveToTrash(_ urls: [URL]) async
+    func createTraditionalVersions(of urls: [URL]) async -> [URL]
     func addTagItems(to menu: NSMenu, for urls: [URL])
     var canPasteFiles: Bool { get }
     func transferPastedFiles(_ kind: FileTransfer.Kind, into folder: URL)

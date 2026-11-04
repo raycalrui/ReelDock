@@ -630,6 +630,9 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
             if selection.count == 1 {
                 add("Rename", #selector(contextRename))
             }
+            if selection.contains(where: SubtitleConverter.canConvert) {
+                add("Create Traditional Chinese Version", #selector(contextCreateTraditional))
+            }
             add("Move to Trash", #selector(contextTrash))
             if let target = browser?.pasteFolder {
                 addPasteItems(to: menu, into: target)
@@ -664,6 +667,15 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     @objc private func contextRename() {
         browser?.renameSelection()
+    }
+
+    @objc private func contextCreateTraditional() {
+        guard let host = browser?.host else { return }
+        let subtitles = selectedItems.filter(SubtitleConverter.canConvert).map(\.url)
+        Task {
+            let created = await host.createTraditionalVersions(of: subtitles)
+            await load { if created.count == 1 { self.select(url: created[0]) } }
+        }
     }
 
     @objc private func contextTrash() {

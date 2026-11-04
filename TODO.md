@@ -71,6 +71,7 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 - [x] Settings window with both folders, clearing the archive, and resetting the section layout (scripted, except the Choose buttons; not seen on screen)
 - [x] Drag in and between sections, onto folder rows, columns, and section headers (drop handling scripted with a stand-in for the drag on temporary fixtures, a temporary volume, and a simulated card; a real mouse drag and the highlights not exercised)
 - [x] Finder's sound when moving to the Trash (scripted that it's requested and the sound loads, not heard)
+- [x] Create a Traditional Chinese version of an `.srt` from its context menu (unit tested, conversion compared with 15 real hand-made pairs, scripted on temporary fixtures)
 - [x] Inspector stays open, and with nothing selected shows the open folder's thumbnail, size, file counts, top-level folders, and dates, or the projects folder on the new-tab page (unit tested, scripted on temporary fixtures, off screen)
 - [x] Open a folder or collapsed section while hovering over it during a drag (scripted with a stand-in for the drag on temporary fixtures; a real mouse drag and a drag whose source column gets replaced not exercised)
 - [x] Make dragging to Finder copy files, by allowing only copy when dragging out (code only: a real drag to Finder or DaVinci Resolve not exercised)
