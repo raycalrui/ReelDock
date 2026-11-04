@@ -5,7 +5,8 @@ These rules apply to agents working in this repository unless the user explicitl
 ## Product and language
 
 - ReelDock is a native macOS app for managing video project folders and importing from camera cards. It is built for Raycal's own workflow first.
-- Use English for UI, code comments, filenames, README, documentation, and commit messages. Communicate with Raycal in Simplified Chinese.
+- Use English for UI, code comments, filenames, documentation, and commit messages. Communicate with Raycal in Simplified Chinese.
+- The README and release notes are in both English and Simplified Chinese. `README.zh-CN.md` mirrors `README.md`, so change them together.
 - `docs/SPEC.md` defines intended behavior. Implement only what is selected in `TODO.md`; other ideas stay as candidates.
 
 ## Before changes
@@ -53,7 +54,7 @@ Client and project names, footage, and device serial numbers stay out of the rep
 ## Documentation
 
 - Track milestones in `TODO.md`, and mark an item done only after implementation and proportionate verification.
-- Record lasting choices in `DECISIONS.md`. Update `README.md` when capabilities or limitations change.
+- Record lasting choices in `DECISIONS.md`. Update both READMEs when capabilities or limitations change.
 - Describe current facts. Do not equate planned, built, verified on a real card, signed, and released.
 
 ## Git
@@ -63,6 +64,6 @@ Client and project names, footage, and device serial numbers stay out of the rep
 
 ## Releases
 
-Create a release only when Raycal asks. Build with `scripts/build-release.sh`, upload the DMG to the GitHub release and check it, then run `scripts/prepare-update.sh` and push `appcast.xml`. Sparkle's private key is in the login Keychain under the account `cc.raycal.ReelDock` and never goes in the repository. Debug builds never update themselves.
+Create a release only when Raycal asks. Its notes have the English first, then a `---` line, then the same notes in Simplified Chinese. Build with `scripts/build-release.sh`, upload the DMG to the GitHub release and check it, then run `scripts/prepare-update.sh` and push `appcast.xml`. Sparkle's private key is in the login Keychain under the account `cc.raycal.ReelDock` and never goes in the repository. Debug builds never update themselves.
 
 Test builds outside DerivedData stay registered with LaunchServices and can leave the Dock showing a blank icon. Unregister and delete them when done.

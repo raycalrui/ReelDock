@@ -1,5 +1,7 @@
 # ReelDock
 
+English | [简体中文](README.zh-CN.md)
+
 A native macOS workspace for video projects: open a project and see every folder at once, and offload camera cards without digging through them in Finder.
 
 **Status: browsing, card import, inline playback, basic file operations, and Finder tags are implemented and awaiting hands-on acceptance.** The list below describes the intended first version. See [docs/SPEC.md](docs/SPEC.md) for behavior, [TODO.md](TODO.md) for milestones, and [DECISIONS.md](DECISIONS.md) for the reasoning behind lasting choices.
