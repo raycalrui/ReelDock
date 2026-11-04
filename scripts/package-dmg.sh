@@ -8,7 +8,9 @@ team="$3"
 [[ ! -e "$output" ]] || { echo "Refusing to replace $output" >&2; exit 1; }
 
 codesign --verify --deep --strict "$app"
-codesign -dv "$app" 2>&1 | grep -q "TeamIdentifier=$team" || { echo "Wrong team" >&2; exit 65; }
+# Not a pipe into grep -q, which can stop codesign mid-output and fail the pipeline even with the right team.
+signature=$(codesign -dv "$app" 2>&1)
+[[ "$signature" == *"TeamIdentifier=$team"* ]] || { echo "Wrong team" >&2; exit 65; }
 xcrun stapler validate "$app"
 spctl --assess --type execute "$app"
 
