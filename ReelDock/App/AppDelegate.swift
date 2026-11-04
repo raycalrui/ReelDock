@@ -33,16 +33,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Quitting during an import asks first, then lets the copy clean up its temporary file.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let app, app.queue.isActive else { return .terminateNow }
+        guard let app, app.queue.isActive || app.transfers.isActive else { return .terminateNow }
         let alert = NSAlert()
-        alert.messageText = "Quit and cancel the import?"
-        alert.informativeText = "The clip being copied will be discarded. Clips already imported are safe."
-        alert.addButton(withTitle: "Keep Importing")
+        alert.messageText = app.queue.isActive ? "Quit and cancel the import?" : "Quit and cancel the copy?"
+        alert.informativeText = "The file being copied will be discarded. Files already finished are safe."
+        alert.addButton(withTitle: "Keep Copying")
         alert.addButton(withTitle: "Quit")
         guard alert.runModal() == .alertSecondButtonReturn else { return .terminateCancel }
         app.queue.cancelAll()
+        app.transfers.cancelAll()
         Task {
-            while app.queue.isActive {
+            while app.queue.isActive || app.transfers.isActive {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             NSApp.reply(toApplicationShouldTerminate: true)
@@ -52,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         app?.saveNow()
+    }
+
+    @objc func showSettings(_ sender: Any?) {
+        app?.showSettings()
     }
 
     @objc func newWindow(_ sender: Any?) {

@@ -13,6 +13,10 @@ protocol BrowserHost: AnyObject {
     func renameItem(at url: URL, to name: String) -> URL?
     func moveToTrash(_ urls: [URL]) async
     func addTagItems(to menu: NSMenu, for urls: [URL])
+    var canPasteFiles: Bool { get }
+    func transferPastedFiles(_ kind: FileTransfer.Kind, into folder: URL)
+    func dropOperation(_ info: any NSDraggingInfo, into folder: URL) -> NSDragOperation
+    func acceptDrop(_ info: any NSDraggingInfo, into folder: URL) -> Bool
 }
 
 private final class FlippedView: NSView {
@@ -229,6 +233,23 @@ final class ColumnBrowserView: NSView {
     var canCreateFolder: Bool { newFolderColumn != nil && !isReadOnly }
     var canRenameSelection: Bool { selectionColumn?.selectedItems.count == 1 && !isReadOnly }
     var canTrashSelection: Bool { selectionColumn != nil && !isReadOnly }
+
+    var canCopySelection: Bool { selectionColumn != nil }
+
+    func copySelection() {
+        selectionColumn?.copySelectionToPasteboard()
+    }
+
+    /// Like a new folder, a paste goes inside a selected folder, which is already open to the right.
+    /// A section of loose files takes them too, since it's showing the folder they'd land in.
+    var pasteFolder: URL? {
+        guard !isReadOnly, let column = focusedColumn ?? columns.first else { return nil }
+        let selection = column.selectedItems
+        if selection.count == 1, selection[0].isFolder, let child = nextColumn(after: column) {
+            return child.folderURL
+        }
+        return column.folderURL
+    }
 
     func createFolder() {
         guard let column = newFolderColumn else { return }

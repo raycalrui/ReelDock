@@ -21,7 +21,7 @@ extension FinderTag {
     }
 }
 
-private final class MenuClosure: NSObject {
+final class MenuClosure: NSObject {
     private let handler: () -> Void
 
     init(_ handler: @escaping () -> Void) {

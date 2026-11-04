@@ -90,7 +90,7 @@ final class PlaybackController {
 
     /// Closes the file, so a card can be ejected. The selection stays and can load again.
     func release(under folder: URL) {
-        guard let url, url.path.hasPrefix(folder.path + "/") else { return }
+        guard let url, url.path.relocated(from: folder.path, to: "") != nil else { return }
         unload()
     }
 

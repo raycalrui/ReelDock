@@ -186,9 +186,101 @@ private struct Fixture {
     }
 
     @Test func renameRefusesABadDate() {
-        for date in ["2026", "2026-13-01", "2026-02-30", "2027-02-29", "abcd-ef-gh", "2026-1-3", "٢٠٢٦١١٠٣"] {
+        for date in ["2026", "2026-13-01", "2026-02-30", "2027-02-29", "abcd-ef-gh", "2026-1-3", "٢٠٢٦١١٠٣", "0000-00-00"] {
             #expect(ProjectCatalog.folderName(date: date, name: "new") == nil, "\(date)")
         }
+        #expect(ProjectCatalog.folderName(date: "", name: "00000000_new") == nil)
+    }
+
+    @Test func newProjectCopiesTheTemplate() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.folder("00000000_template/0 project")
+        try fixture.folder("00000000_template/3 video/FX3")
+        try fixture.file("00000000_template/.DS_Store")
+        try fixture.file("00000000_template/0 project/.DS_Store")
+        try fixture.file("00000000_template/0 project/base.drp")
+        try fixture.file("00000000_template/4 audio/bgm.mp3")
+        let template = fixture.root.appendingPathComponent("00000000_template")
+        let old = Date(timeIntervalSince1970: 1_000_000_000)
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: template.path)
+
+        let made = try FileOperations.createProject(named: "20261104_new", in: fixture.root, from: template)
+
+        let manager = FileManager.default
+        #expect(made.lastPathComponent == "20261104_new")
+        #expect(manager.fileExists(atPath: made.appendingPathComponent("3 video/FX3").path))
+        #expect(manager.fileExists(atPath: made.appendingPathComponent("4 audio/bgm.mp3").path))
+        #expect(!manager.fileExists(atPath: made.appendingPathComponent(".DS_Store").path))
+        #expect(!manager.fileExists(atPath: made.appendingPathComponent("0 project/.DS_Store").path))
+        #expect(!manager.fileExists(atPath: made.appendingPathComponent("0 project/base.drp").path))
+        #expect(manager.fileExists(atPath: template.appendingPathComponent(".DS_Store").path))
+        #expect(manager.fileExists(atPath: template.appendingPathComponent("0 project/base.drp").path))
+        let modified = try #require(try manager.attributesOfItem(atPath: made.path)[.modificationDate] as? Date)
+        #expect(modified > old)
+        #expect(try manager.contentsOfDirectory(atPath: fixture.root.path).sorted() == ["00000000_template", "20261104_new"])
+    }
+
+    @Test func newProjectNeverReplacesAFolder() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.folder("00000000_template/3 video")
+        try fixture.file("20261104_taken/3 video/clip.mp4")
+        let template = fixture.root.appendingPathComponent("00000000_template")
+
+        #expect(throws: FileOperationError.nameTaken("20261104_taken")) {
+            try FileOperations.createProject(named: "20261104_taken", in: fixture.root, from: template)
+        }
+        #expect(throws: FileOperationError.invalidName) {
+            try FileOperations.createProject(named: "a/b", in: fixture.root, from: template)
+        }
+        let manager = FileManager.default
+        #expect(manager.fileExists(atPath: fixture.root.appendingPathComponent("20261104_taken/3 video/clip.mp4").path))
+        #expect(try manager.contentsOfDirectory(atPath: fixture.root.path).sorted() == ["00000000_template", "20261104_taken"])
+    }
+
+    @Test func newProjectStartsEmptyWithoutATemplate() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let made = try FileOperations.createProject(
+            named: "20261104_new",
+            in: fixture.root,
+            from: fixture.root.appendingPathComponent("00000000_template")
+        )
+        #expect(try FileManager.default.contentsOfDirectory(atPath: made.path).isEmpty)
+        #expect(try ProjectCatalog.list(root: fixture.root).map(\.folderName) == ["20261104_new"])
+    }
+
+    @Test func newProjectLeavesNothingBehindWhenTheCopyFails() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        let manager = FileManager.default
+        try fixture.file("00000000_template/secret/clip.mp4")
+        let locked = fixture.root.appendingPathComponent("00000000_template/secret")
+        try manager.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+
+        #expect(throws: (any Error).self) {
+            try FileOperations.createProject(named: "20261104_new", in: fixture.root, from: fixture.root.appendingPathComponent("00000000_template"))
+        }
+        #expect(try manager.contentsOfDirectory(atPath: fixture.root.path) == ["00000000_template"])
+    }
+
+    @Test func projectsFilterByNameAndTag() {
+        let green = FinderTag(name: "Green", colorIndex: 2)
+        let bgm = FinderTag(name: "BGM", colorIndex: 5)
+        func project(_ name: String, _ tags: [FinderTag]) -> ProjectEntry {
+            var entry = ProjectCatalog.entry(for: URL(fileURLWithPath: "/p/\(name)"))
+            entry.tags = tags
+            return entry
+        }
+        let projects = [project("20261101_alpha", [green]), project("20261102_beta", [green, bgm]), project("20261103_gamma", [])]
+
+        #expect(ProjectCatalog.filter(projects, query: "", tag: nil).count == 3)
+        #expect(ProjectCatalog.filter(projects, query: "", tag: "Green").map(\.title) == ["alpha", "beta"])
+        #expect(ProjectCatalog.filter(projects, query: "BET", tag: "Green").map(\.title) == ["beta"])
+        #expect(ProjectCatalog.filter(projects, query: "gamma", tag: "Green").isEmpty)
+        #expect(ProjectCatalog.tags(in: projects).map(\.name) == ["BGM", "Green"])
     }
 
     @Test func tabsFollowARenamedFolder() {
@@ -519,5 +611,175 @@ private struct Fixture {
         #expect(choices.first { $0.tag.name == "Green" }?.state == .all)
         #expect(choices.first { $0.tag.name == "Client" }?.state == .some)
         #expect(choices.first { $0.tag.name == "Red" }?.state == TagChoice.State.none)
+    }
+}
+
+@Suite struct FileTransferTests {
+    private func children(_ url: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: url.path).sorted()
+    }
+
+    @Test func dropsMoveWithinAVolumeUnlessACopyIsForced() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("a/clip.mp4")
+        try fixture.folder("a/inner")
+        try fixture.folder("b")
+        let clip = fixture.root.appendingPathComponent("a/clip.mp4")
+        let inner = fixture.root.appendingPathComponent("a/inner")
+        let a = fixture.root.appendingPathComponent("a")
+        let b = fixture.root.appendingPathComponent("b")
+        func kind(_ sources: [URL], _ destination: URL, copy: Bool = true, move: Bool = true, force: Bool = false) -> FileTransfer.Kind? {
+            FileTransfer.dropKind(sources: sources, destination: destination, canCopy: copy, canMove: move, forcesMove: force)
+        }
+
+        #expect(kind([clip], b) == .move)
+        #expect(kind([clip], b, move: false) == .copy)
+        #expect(kind([clip], b, copy: false, move: false, force: true) == .move)
+        #expect(kind([clip], b, copy: false, move: false) == nil)
+        // Back where it came from: nothing to do, unless it's a copy.
+        #expect(kind([clip], a) == nil)
+        #expect(kind([clip], a, move: false) == .copy)
+        // A folder can't go inside itself, even as a copy.
+        #expect(kind([inner], inner) == nil)
+        #expect(kind([a], inner) == nil)
+        #expect(kind([a], inner, move: false) == nil)
+        #expect(kind([], b) == nil)
+        #expect(kind([fixture.root.appendingPathComponent("missing.mp4")], b) == nil)
+    }
+
+    @Test func namesNeverCollide() {
+        #expect(FileTransfer.candidateName(for: "a.mp4", isFolder: false, kind: .copy, attempt: 0) == "a.mp4")
+        #expect(FileTransfer.candidateName(for: "a.mp4", isFolder: false, kind: .copy, attempt: 1) == "a copy.mp4")
+        #expect(FileTransfer.candidateName(for: "a.mp4", isFolder: false, kind: .copy, attempt: 2) == "a copy 2.mp4")
+        #expect(FileTransfer.candidateName(for: "a.mp4", isFolder: false, kind: .move, attempt: 1) == "a 2.mp4")
+        #expect(FileTransfer.candidateName(for: "v1.2", isFolder: true, kind: .copy, attempt: 1) == "v1.2 copy")
+    }
+
+    @Test func copiesAFolderWithEverythingInIt() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("source/a.mp4")
+        try fixture.file("source/nested/deep/b.mov")
+        try fixture.file("source/.hidden")
+        try fixture.folder("source/empty")
+        try fixture.folder("target")
+        let source = fixture.root.appendingPathComponent("source")
+        let manager = FileManager.default
+        try manager.createSymbolicLink(atPath: source.appendingPathComponent("link").path, withDestinationPath: "a.mp4")
+        let old = Date(timeIntervalSince1970: 1_000_000_000)
+        try manager.setAttributes([.modificationDate: old], ofItemAtPath: source.appendingPathComponent("a.mp4").path)
+        try FinderTags.write(["Green"], to: source.appendingPathComponent("a.mp4"))
+
+        let item = try FileTransfer.perform(source, kind: .copy, destination: fixture.root.appendingPathComponent("target"), control: CopyControl())
+
+        #expect(item.result.lastPathComponent == "source")
+        #expect(try children(item.result) == [".hidden", "a.mp4", "empty", "link", "nested"])
+        #expect(manager.fileExists(atPath: item.result.appendingPathComponent("nested/deep/b.mov").path))
+        #expect(try manager.destinationOfSymbolicLink(atPath: item.result.appendingPathComponent("link").path) == "a.mp4")
+        let copied = item.result.appendingPathComponent("a.mp4")
+        #expect(FinderTags.read(copied).map(\.name) == ["Green"])
+        #expect(try manager.attributesOfItem(atPath: copied.path)[.modificationDate] as? Date == old)
+        #expect(try children(fixture.root.appendingPathComponent("target")) == ["source"])
+        #expect(manager.fileExists(atPath: source.appendingPathComponent("a.mp4").path))
+    }
+
+    @Test func aPasteBesideTheOriginalGetsANewName() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("clip.mp4")
+        let source = fixture.root.appendingPathComponent("clip.mp4")
+        let first = try FileTransfer.perform(source, kind: .copy, destination: fixture.root, control: CopyControl())
+        let second = try FileTransfer.perform(source, kind: .copy, destination: fixture.root, control: CopyControl())
+        #expect(first.result.lastPathComponent == "clip copy.mp4")
+        #expect(second.result.lastPathComponent == "clip copy 2.mp4")
+    }
+
+    @Test func aMoveWithinAVolumeRenamesWithoutReplacing() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("from/clip.mp4")
+        try Data("original".utf8).write(to: fixture.root.appendingPathComponent("clip.mp4"))
+        let source = fixture.root.appendingPathComponent("from/clip.mp4")
+        let inode = try FileManager.default.attributesOfItem(atPath: source.path)[.systemFileNumber] as? Int
+
+        let item = try FileTransfer.perform(source, kind: .move, destination: fixture.root, control: CopyControl())
+
+        #expect(item.result.lastPathComponent == "clip 2.mp4")
+        #expect(item.trashedOriginal == nil)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(try FileManager.default.attributesOfItem(atPath: item.result.path)[.systemFileNumber] as? Int == inode)
+        #expect(try Data(contentsOf: fixture.root.appendingPathComponent("clip.mp4")) == Data("original".utf8))
+    }
+
+    @Test func aDamagedCopyIsNeverPublished() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("source/clip.mp4")
+        try fixture.folder("target")
+        let hooks = ClipCopier.Hooks(afterWrite: { part in
+            try? Data("damaged".utf8).write(to: part)
+        })
+
+        #expect(throws: ClipCopier.Failure.verificationMismatch) {
+            try FileTransfer.perform(
+                fixture.root.appendingPathComponent("source"),
+                kind: .copy,
+                destination: fixture.root.appendingPathComponent("target"),
+                control: CopyControl(),
+                hooks: hooks
+            )
+        }
+        #expect(try children(fixture.root.appendingPathComponent("target")).isEmpty)
+    }
+
+    @Test func aCancelledCopyLeavesNothing() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("clip.mp4")
+        try fixture.folder("target")
+        let control = CopyControl()
+        control.cancel()
+        #expect(throws: ClipCopier.Failure.cancelled) {
+            try FileTransfer.perform(fixture.root.appendingPathComponent("clip.mp4"), kind: .copy, destination: fixture.root.appendingPathComponent("target"), control: control)
+        }
+        #expect(try children(fixture.root.appendingPathComponent("target")).isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.root.appendingPathComponent("clip.mp4").path))
+    }
+
+    @Test func aFolderCantGoInsideItself() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.folder("a/b")
+        let folder = fixture.root.appendingPathComponent("a")
+        for destination in [folder, folder.appendingPathComponent("b")] {
+            #expect(throws: FileOperationError.insideItself("a")) {
+                try FileTransfer.validate(sources: [folder], destination: destination, kind: .copy)
+            }
+        }
+        #expect(throws: FileOperationError.itemMissing("gone")) {
+            try FileTransfer.validate(sources: [fixture.root.appendingPathComponent("gone")], destination: fixture.root, kind: .copy)
+        }
+        #expect(FileTransfer.itemsThatWouldChange([folder], destination: fixture.root, kind: .move).isEmpty)
+        #expect(FileTransfer.itemsThatWouldChange([folder], destination: fixture.root, kind: .copy) == [folder])
+    }
+
+    @MainActor @Test func onlyBusyFoldersAreRefused() throws {
+        let fixture = try Fixture()
+        defer { fixture.remove() }
+        try fixture.file("project/3 video/clip.mp4")
+        try fixture.folder("elsewhere")
+        let registry = PartFileRegistry(fileURL: fixture.root.appendingPathComponent("parts.json"))
+        let queue = FileTransferQueue(registry: registry)
+        queue.setPaused(true)
+        let video = fixture.root.appendingPathComponent("project/3 video")
+        queue.enqueue(.copy, sources: [video.appendingPathComponent("clip.mp4")], destination: fixture.root.appendingPathComponent("elsewhere")) { _, _, _ in }
+
+        #expect(queue.isBusy(with: fixture.root.appendingPathComponent("project")))
+        #expect(queue.isBusy(with: video))
+        #expect(queue.isBusy(with: video.appendingPathComponent("clip.mp4")))
+        #expect(queue.isBusy(with: fixture.root.appendingPathComponent("elsewhere")))
+        #expect(!queue.isBusy(with: fixture.root.appendingPathComponent("other")))
+        queue.cancelAll()
     }
 }

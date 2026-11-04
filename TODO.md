@@ -62,14 +62,21 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 
 - [x] New folder, inline rename, move to Trash, and undo for all three (scripted on temporary fixtures, and refused on a simulated card)
 - [x] Rename and redate a project from the sidebar, with open tabs and favorites following (scripted on temporary fixtures)
-- [ ] Copy, paste, and move
-- [ ] Drag in and between sections
+- [x] Copy, paste, and move, with verification, background progress, and undo (scripted through the responder chain on temporary fixtures, a temporary APFS volume, and a simulated card, including no space, a removed drive, cancel, and taken names; real shortcuts and the popover not exercised)
+- [x] Refuse to rename, move, or trash a folder being imported or copied into (scripted during a paused import and a paused copy)
+- [x] Move a project to the Trash from the sidebar, with undo (scripted on temporary fixtures)
+- [x] Keyboard focus when a folder opens (scripted)
+- [x] Settings window with both folders, clearing the archive, and resetting the section layout (scripted, except the Choose buttons; not seen on screen)
+- [x] Drag in and between sections, onto folder rows, columns, and section headers (drop handling scripted with a stand-in for the drag on temporary fixtures, a temporary volume, and a simulated card; a real mouse drag and the highlights not exercised)
+- [x] Finder's sound when moving to the Trash (scripted that it's requested and the sound loads, not heard)
+- [x] Inspector shows with a selection and hides without one (scripted, including hiding by hand and a narrow window; the animation not seen on screen)
+- [ ] Open a folder while hovering over it during a drag, as Finder does
 - [ ] Make dragging to Finder copy files. It currently creates an alias, because dragging out only allows copy and link.
 - [x] Read tags and colors, and show them on rows, section headers, favorites, and the project list (colors read from real projects, rendering scripted on fixtures, sidebar not seen on screen)
 - [x] Write tags on single and multiple selections, with Finder's color row and undo (scripted on fixtures through the palette's own handler, menus not seen on screen, not yet checked in Finder)
 - [x] Show tag dots in front of names on projects, favorites, the new-tab list, and tabs (tabs and the new-tab list seen in snapshots, sidebar not seen on screen)
-- [ ] Filter projects by tag
-- [ ] New project from template
+- [x] Filter projects by tag (filtering scripted and unit tested, the menu not exercised or seen on screen)
+- [x] New project from template (scripted on temporary fixtures, including a taken name, a bad date, no template, and a card panel; the Return key and the sheet's look not checked on screen)
 
 Done when: tags set in ReelDock appear in Finder and tags set in Finder appear in ReelDock, tested on temporary fixtures.
 

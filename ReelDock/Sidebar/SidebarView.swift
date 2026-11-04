@@ -15,9 +15,16 @@ struct SidebarView: View {
     @AppStorage("sidebar.projectsExpanded") private var projectsExpanded = true
 
     private var filteredProjects: [ProjectEntry] {
-        let query = filter.trimmingCharacters(in: .whitespaces)
-        guard !query.isEmpty else { return app.projects }
-        return app.projects.filter { $0.folderName.localizedCaseInsensitiveContains(query) }
+        ProjectCatalog.filter(app.projects, query: filter, tag: activeTag)
+    }
+
+    private var projectTags: [FinderTag] {
+        ProjectCatalog.tags(in: app.projects)
+    }
+
+    /// A tag that's gone from every project stops filtering, rather than leaving an empty list with no way back.
+    private var activeTag: String? {
+        projectTags.contains { $0.name == tab.projectTagFilter } ? tab.projectTagFilter : nil
     }
 
     /// Paths open in Projects are highlighted there, not again under Favorites.
@@ -81,6 +88,11 @@ struct SidebarView: View {
                     ForEach(filteredProjects) { project in
                         projectRow(project)
                     }
+                    if filteredProjects.isEmpty, activeTag != nil || !filter.isEmpty {
+                        Text("No matching projects")
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             } header: {
                 Text("Projects")
@@ -88,12 +100,54 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .top, spacing: 0) {
-            TextField("Filter Projects", text: $filter)
-                .textFieldStyle(.roundedBorder)
-                .controlSize(.regular)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
+            HStack(spacing: 6) {
+                TextField("Filter Projects", text: $filter)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.regular)
+                tagFilterMenu
+                Button {
+                    controller?.promptNewProject()
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderless)
+                .disabled(!app.canCreateProject)
+                .help("New Project")
+                .accessibilityLabel("New Project")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
         }
+    }
+
+    private var tagFilterMenu: some View {
+        Menu {
+            Picker("Filter by Tag", selection: Binding(
+                get: { activeTag },
+                set: { tab.projectTagFilter = $0 }
+            )) {
+                Text("All Projects").tag(String?.none)
+                ForEach(projectTags, id: \.name) { tag in
+                    Label {
+                        Text(tag.name)
+                    } icon: {
+                        Image(nsImage: tag.menuImage)
+                    }
+                    .tag(String?.some(tag.name))
+                }
+            }
+            .pickerStyle(.inline)
+            .labelsHidden()
+        } label: {
+            Image(systemName: activeTag == nil ? "tag" : "tag.fill")
+                .foregroundStyle(activeTag == nil ? Color.secondary : Color.accentColor)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .disabled(projectTags.isEmpty)
+        .help("Filter by tag")
+        .accessibilityLabel("Filter by tag")
     }
 
     private func cardRow(_ card: CameraCard) -> some View {

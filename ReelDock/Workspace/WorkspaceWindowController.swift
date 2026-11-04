@@ -1,4 +1,5 @@
 import AppKit
+import AudioToolbox
 import SwiftUI
 
 private extension NSToolbarItem.Identifier {
@@ -15,17 +16,23 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     let tab = TabModel()
     let content: TabContentViewController
 
-    private let splitController = NSSplitViewController()
+    private let splitController = WorkspaceSplitViewController()
     private let modeControl = NSSegmentedControl()
     private weak var favoriteItem: NSToolbarItem?
     private weak var importItem: NSToolbarItem?
     private var contentItem: NSSplitViewItem?
     private var inspectorItem: NSSplitViewItem?
     private var inspectorObservation: NSKeyValueObservation?
+    /// Hidden by hand with something selected, so selecting more doesn't bring it back.
+    private var inspectorStaysHidden = false
+    private var pendingInspectorChange: Task<Void, Never>?
+    private var lastDropCheck: (sequence: Int, folder: URL, mask: NSDragOperation, operation: NSDragOperation)?
     private var keyMonitor: Any?
     private var fullScreenPreview: FullScreenPreview?
     private static let defaultContentMinimumWidth: CGFloat = 420
     private static let defaultInspectorWidth: CGFloat = 440
+    /// A delete or a refresh can clear the selection just before the next one, and that shouldn't flash the inspector.
+    private static let inspectorHideDelay: Duration = .milliseconds(200)
     #if DEBUG
     var debugInspectorItem: NSSplitViewItem? { inspectorItem }
     var debugImportItem: NSToolbarItem? { importItem }
@@ -47,7 +54,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         )
         window.tabbingMode = .automatic
         window.tabbingIdentifier = "cc.raycal.ReelDock.workspace"
-        window.minSize = NSSize(width: 820, height: 480)
+        // Room for all three panes, so the inspector showing with a selection never has to resize the window.
+        window.minSize = NSSize(width: 900, height: 480)
         window.isRestorable = false
         window.toolbarStyle = .unified
         window.title = "ReelDock"
@@ -62,6 +70,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         if !window.setFrameUsingName("ReelDockWorkspace") { window.center() }
         window.setFrameAutosaveName("ReelDockWorkspace")
         installKeyMonitor()
+        inspectorItem?.isCollapsed = true
+        tab.onSelectionChange = { [weak self] in self?.selectionDidChange() }
+        splitController.onToggleInspector = { [weak self] in self?.inspectorWasToggled() }
 
         content.display()
     }
@@ -106,6 +117,32 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         toolbar.displayMode = .iconOnly
         toolbar.allowsUserCustomization = false
         window?.toolbar = toolbar
+    }
+
+    // MARK: Inspector
+
+    /// The inspector shows with a selection and hides without one.
+    /// Never in the same turn, because this runs inside the table's selection callback, which mustn't resize the table.
+    private func selectionDidChange() {
+        pendingInspectorChange?.cancel()
+        let hasSelection = !tab.selection.isEmpty
+        guard !hasSelection || !inspectorStaysHidden else { return }
+        pendingInspectorChange = Task { [weak self] in
+            if !hasSelection { try? await Task.sleep(for: Self.inspectorHideDelay) }
+            guard !Task.isCancelled else { return }
+            self?.setInspectorCollapsed(!hasSelection)
+        }
+    }
+
+    /// Runs before the toggle takes effect. Hiding it with nothing selected is where it's headed anyway.
+    private func inspectorWasToggled() {
+        pendingInspectorChange?.cancel()
+        inspectorStaysHidden = inspectorItem?.isCollapsed == false && !tab.selection.isEmpty
+    }
+
+    private func setInspectorCollapsed(_ collapsed: Bool) {
+        guard let inspectorItem, inspectorItem.isCollapsed != collapsed else { return }
+        inspectorItem.animator().isCollapsed = collapsed
     }
 
     // MARK: Showing folders
@@ -162,8 +199,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         }
     }
 
-    @objc func chooseProjectRoot(_ sender: Any?) {
-        app.chooseProjectRoot(from: self)
+    @objc func newProject(_ sender: Any?) {
+        promptNewProject()
     }
 
     @objc func showSections(_ sender: Any?) { setMode(.sections) }
@@ -243,10 +280,6 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         content.hideImportPanel()
     }
 
-    @objc func chooseMediaRoot(_ sender: Any?) {
-        app.chooseMediaRoot(from: self)
-    }
-
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         switch menuItem.action {
         case #selector(showSections(_:)):
@@ -264,6 +297,12 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
             return tab.folder != nil
         case #selector(revealInFinder(_:)):
             return tab.folder != nil
+        case #selector(newProject(_:)):
+            return app.canCreateProject
+        case #selector(copy(_:)):
+            return content.fileOperationBrowser?.canCopySelection ?? false
+        case #selector(paste(_:)), #selector(moveItemsHere(_:)):
+            return content.fileOperationBrowser?.pasteFolder != nil && !NSPasteboard.files.fileURLs.isEmpty
         case #selector(newFolder(_:)):
             return content.fileOperationBrowser?.canCreateFolder ?? false
         case #selector(renameSelection(_:)):
@@ -292,6 +331,133 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         content.fileOperationBrowser?.trashSelection()
     }
 
+    @objc func copy(_ sender: Any?) {
+        content.fileOperationBrowser?.copySelection()
+    }
+
+    @objc func paste(_ sender: Any?) {
+        guard let folder = content.fileOperationBrowser?.pasteFolder else { return }
+        transferPastedFiles(.copy, into: folder)
+    }
+
+    @objc func moveItemsHere(_ sender: Any?) {
+        guard let folder = content.fileOperationBrowser?.pasteFolder else { return }
+        transferPastedFiles(.move, into: folder)
+    }
+
+    func transferPastedFiles(_ kind: FileTransfer.Kind, into folder: URL) {
+        let sources = NSPasteboard.files.fileURLs
+        guard !sources.isEmpty else { return }
+        // Pasting a folder that's still selected makes a copy beside it, not inside it.
+        let destination = sources.contains { $0.path == folder.path } ? folder.deletingLastPathComponent() : folder
+        transfer(kind, sources: sources, into: destination)
+    }
+
+    private func dropKind(_ info: any NSDraggingInfo, into folder: URL) -> FileTransfer.Kind? {
+        let mask = info.draggingSourceOperationMask
+        return FileTransfer.dropKind(
+            sources: info.draggingPasteboard.fileURLs,
+            destination: folder,
+            canCopy: mask.contains(.copy),
+            canMove: mask.contains(.move),
+            forcesMove: mask == .generic
+        )
+    }
+
+    /// Asked continually during a drag, and the checks touch the disk for every dragged file, so the answer is kept until something changes.
+    func dropOperation(_ info: any NSDraggingInfo, into folder: URL) -> NSDragOperation {
+        let mask = info.draggingSourceOperationMask
+        if let last = lastDropCheck, last.sequence == info.draggingSequenceNumber, last.folder == folder, last.mask == mask {
+            return last.operation
+        }
+        let operation: NSDragOperation = switch dropKind(info, into: folder) {
+        case .copy: .copy
+        case .move: mask.contains(.move) ? .move : .generic
+        case nil: []
+        }
+        lastDropCheck = (info.draggingSequenceNumber, folder, mask, operation)
+        return operation
+    }
+
+    func acceptDrop(_ info: any NSDraggingInfo, into folder: URL) -> Bool {
+        lastDropCheck = nil
+        guard let kind = dropKind(info, into: folder) else { return false }
+        transfer(kind, sources: info.draggingPasteboard.fileURLs, into: folder)
+        return true
+    }
+
+    private func transfer(_ kind: FileTransfer.Kind, sources: [URL], into destination: URL) {
+        let title = kind == .copy ? "Can't copy" : "Can't move"
+        do {
+            try FileTransfer.validate(sources: sources, destination: destination, kind: kind)
+            let changing = FileTransfer.itemsThatWouldChange(sources, destination: destination, kind: kind)
+            guard !changing.isEmpty else { return }
+            if kind == .move {
+                guard !changing.contains(where: app.isBusy) else { throw FileOperationError.importing }
+                changing.forEach(app.releasePlayback)
+            }
+            app.transfers.enqueue(kind, sources: changing, destination: destination) { [weak self] kind, items, failure in
+                self?.finishTransfer(kind, items: items, failure: failure, title: title)
+            }
+        } catch {
+            showFileError(title, error)
+        }
+    }
+
+    private func finishTransfer(_ kind: FileTransfer.Kind, items: [FileTransfer.Item], failure: String?, title: String) {
+        if !items.isEmpty {
+            switch kind {
+            case .copy:
+                let copies = items.map(\.result)
+                window?.undoManager?.registerUndo(withTarget: self) { target in
+                    target.moveToTrashNow(copies)
+                }
+                window?.undoManager?.setActionName("Copy")
+            case .move:
+                registerUndoOfMove(items)
+                items.forEach { app.folderDidMove(from: $0.source, to: $0.result) }
+            }
+            content.reloadFolderContents()
+            app.cards.refreshPresence()
+        }
+        if let failure { showFileError(title, message: failure) }
+    }
+
+    private func registerUndoOfMove(_ items: [FileTransfer.Item]) {
+        window?.undoManager?.registerUndo(withTarget: self) { target in
+            target.undoMove(items)
+        }
+        window?.undoManager?.setActionName("Move")
+    }
+
+    /// A move within a volume can be redone. One across volumes puts the original back and sends the copy to the Trash, which ends it.
+    private func undoMove(_ items: [FileTransfer.Item]) {
+        var redo: [FileTransfer.Item] = []
+        for item in items {
+            do {
+                guard !app.isBusy(item.result) else { throw FileOperationError.importing }
+                app.releasePlayback(under: item.result)
+                if let trashed = item.trashedOriginal {
+                    try FileOperations.restore(FileOperations.TrashedItem(original: item.source, trashed: trashed))
+                    if let error = FileOperations.moveToTrash([item.result]).error { throw error }
+                } else {
+                    guard !FileManager.default.fileExists(atPath: item.source.path) else {
+                        throw FileOperationError.nameTaken(item.source.lastPathComponent)
+                    }
+                    // moveItem refuses to replace an existing item.
+                    try FileManager.default.moveItem(at: item.result, to: item.source)
+                    redo.append(FileTransfer.Item(source: item.result, result: item.source))
+                }
+                app.folderDidMove(from: item.result, to: item.source)
+            } catch {
+                showFileError("Can't undo the move of “\(item.result.lastPathComponent)”", error)
+                break
+            }
+        }
+        if !redo.isEmpty { registerUndoOfMove(redo) }
+        content.reloadFolderContents()
+    }
+
     func createFolder(in folder: URL) -> URL? {
         do {
             let url = try FileOperations.createFolder(in: folder)
@@ -308,6 +474,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     func renameItem(at url: URL, to name: String) -> URL? {
         do {
+            guard !app.isBusy(url) else { throw FileOperationError.importing }
             let renamed = try FileOperations.rename(url, to: name)
             let oldName = url.lastPathComponent
             window?.undoManager?.registerUndo(withTarget: self) { target in
@@ -326,34 +493,16 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         let folderName = url.lastPathComponent
         let alert = NSAlert()
         alert.messageText = "Rename Project"
-        let dateField = NSTextField(string: ProjectCatalog.entry(for: url).displayDate ?? "")
-        dateField.placeholderString = "YYYY-MM-DD"
-        let nameField = NSTextField(string: ProjectCatalog.name(of: folderName))
-        let todayButton = TodayButton(field: dateField)
-        let dateRow = NSStackView(views: [dateField, todayButton])
-        dateRow.spacing = 6
-        dateField.widthAnchor.constraint(equalToConstant: 144).isActive = true
-        let grid = NSGridView(views: [
-            [NSTextField(labelWithString: "Date"), dateRow],
-            [NSTextField(labelWithString: "Name"), nameField],
-        ])
-        grid.rowSpacing = 8
-        grid.column(at: 0).xPlacement = .trailing
-        grid.column(at: 1).width = 210
-        grid.rowAlignment = .firstBaseline
-        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 52)
-        alert.accessoryView = grid
-        alert.window.initialFirstResponder = nameField
-        dateField.nextKeyView = todayButton
-        todayButton.nextKeyView = nameField
-        nameField.nextKeyView = dateField
+        let form = ProjectForm(date: ProjectCatalog.entry(for: url).displayDate ?? "", name: ProjectCatalog.name(of: folderName))
+        alert.accessoryView = form.view
+        alert.window.initialFirstResponder = form.name
         alert.addButton(withTitle: "Rename")
         alert.addButton(withTitle: "Cancel")
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
-            let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+            let name = form.name.stringValue.trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else { return }
-            guard let newName = ProjectCatalog.folderName(date: dateField.stringValue, name: name) else {
+            guard let newName = ProjectCatalog.folderName(date: form.date.stringValue, name: name) else {
                 self?.showFileError("Can't rename “\(folderName)”", FileOperationError.invalidDate)
                 return
             }
@@ -375,6 +524,103 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         }
     }
 
+    func promptNewProject() {
+        guard let window, let root = app.projectRootURL else { return }
+        let template = root.appendingPathComponent(ProjectCatalog.templateName, isDirectory: true)
+        let alert = NSAlert()
+        alert.messageText = "New Project"
+        if !FileManager.default.fileExists(atPath: template.path) {
+            alert.informativeText = "The projects folder has no “\(ProjectCatalog.templateName)” folder, so this project starts empty."
+        }
+        let form = ProjectForm(date: ProjectCatalog.dateString(.now), name: "")
+        alert.accessoryView = form.view
+        alert.window.initialFirstResponder = form.name
+        let create = alert.addButton(withTitle: "Create")
+        alert.addButton(withTitle: "Cancel")
+        // An alert closes on any button, and this one stays open until the project exists.
+        let submit = MenuClosure { [weak self, weak alert, weak create] in
+            guard let alert, let create else { return }
+            self?.createProject(form: form, root: root, template: template, alert: alert, button: create)
+        }
+        create.target = submit
+        create.action = #selector(MenuClosure.run)
+        alert.beginSheetModal(for: window) { _ in
+            withExtendedLifetime(submit) {}
+        }
+    }
+
+    private func createProject(form: ProjectForm, root: URL, template: URL, alert: NSAlert, button: NSButton) {
+        let title = "Can't create the project"
+        let name = form.name.stringValue.trimmingCharacters(in: .whitespaces)
+        guard FileOperations.isValidName(name) else {
+            showFileError(title, message: FileOperationError.invalidName.localizedDescription, over: alert.window)
+            return
+        }
+        guard let folderName = ProjectCatalog.folderName(date: form.date.stringValue, name: name) else {
+            showFileError(title, message: FileOperationError.invalidDate.localizedDescription, over: alert.window)
+            return
+        }
+        button.isEnabled = false
+        Task {
+            // Off the main thread, because the template can be large or on a slow drive.
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try FileOperations.createProject(named: folderName, in: root, from: template) }
+            }.value
+            button.isEnabled = true
+            switch result {
+            case let .success(url):
+                window?.endSheet(alert.window, returnCode: .alertFirstButtonReturn)
+                app.openNewProject(url, from: self)
+            case let .failure(error):
+                showFileError(title, message: error.localizedDescription, over: alert.window)
+            }
+        }
+    }
+
+    func promptTrashProject(at url: URL) {
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move “\(url.lastPathComponent)” to the Trash?"
+        alert.informativeText = "Everything in the project goes with it. You can put it back with Undo or from the Trash."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.trashProject(at: url)
+        }
+    }
+
+    private func trashProject(at url: URL) {
+        guard !app.isBusy(url) else {
+            showFileError("Can't move to Trash", FileOperationError.importing)
+            return
+        }
+        let favorites = app.willTrashProject(at: url)
+        Task {
+            // Off the main thread, because a slow drive can take a while to respond.
+            let (moved, failure) = await Task.detached(priority: .userInitiated) {
+                let result = FileOperations.moveToTrash([url])
+                return (result.moved, result.error.map { $0.localizedDescription })
+            }.value
+            app.reloadProjects()
+            if moved.isEmpty { app.restoreFavorites(favorites) }
+            if !moved.isEmpty {
+                TrashSound.play()
+                window?.undoManager?.registerUndo(withTarget: self) { target in
+                    target.restoreFromTrash(moved)
+                    target.app.restoreFavorites(favorites)
+                    target.app.reloadProjects()
+                    // The tab that was showing it went blank, so it picks up where it was.
+                    if target.tab.folder == nil, FileManager.default.fileExists(atPath: url.path) {
+                        target.app.open(url, from: target)
+                    }
+                }
+                window?.undoManager?.setActionName("Move to Trash")
+            }
+            if let failure { showFileError("Can't move to Trash", message: failure) }
+        }
+    }
+
     /// Follows a project that was renamed, keeping the same folders open.
     func folderDidMove(from old: String, to new: String) {
         guard let snapshot = content.snapshot()?.relocated(from: old, to: new) else { return }
@@ -383,6 +629,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     /// Runs off the main thread, because a slow drive can take a while to respond.
     func moveToTrash(_ urls: [URL]) async {
+        guard !urls.contains(where: app.isBusy) else {
+            showFileError("Can't move to Trash", FileOperationError.importing)
+            return
+        }
+        urls.forEach(app.releasePlayback)
         let (moved, failure) = await Task.detached(priority: .userInitiated) {
             let result = FileOperations.moveToTrash(urls)
             return (result.moved, result.error.map { $0.localizedDescription })
@@ -392,12 +643,18 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     /// Undo and redo must register their opposite before they return.
     private func moveToTrashNow(_ urls: [URL]) {
+        guard !urls.contains(where: app.isBusy) else {
+            showFileError("Can't move to Trash", FileOperationError.importing)
+            return
+        }
+        urls.forEach(app.releasePlayback)
         let result = FileOperations.moveToTrash(urls)
         finishTrash(moved: result.moved, failure: result.error?.localizedDescription)
     }
 
     private func finishTrash(moved: [FileOperations.TrashedItem], failure: String?) {
         if !moved.isEmpty {
+            TrashSound.play()
             window?.undoManager?.registerUndo(withTarget: self) { target in
                 target.restoreFromTrash(moved)
             }
@@ -430,11 +687,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         showFileError(title, message: error.localizedDescription)
     }
 
-    private func showFileError(_ title: String, message: String) {
+    private func showFileError(_ title: String, message: String, over sheet: NSWindow? = nil) {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
-        if let window {
+        if let window = sheet ?? window {
             alert.beginSheetModal(for: window)
         } else {
             alert.runModal()
@@ -568,6 +825,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
             menu.addItem(NSMenuItem.closure("Rename…") { [weak self] in
                 self?.promptRenameProject(at: url)
             })
+            menu.addItem(NSMenuItem.closure("Move to Trash…") { [weak self] in
+                self?.promptTrashProject(at: url)
+            })
         }
         menu.addItem(.separator())
         addTagItems(to: menu, for: [url])
@@ -645,7 +905,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         guard event.type == .keyDown, !tab.selection.isEmpty else { return false }
         if !event.isARepeat {
             if !inFullScreen, inspectorItem?.isCollapsed == true {
-                inspectorItem?.animator().isCollapsed = false
+                inspectorStaysHidden = false
+                setInspectorCollapsed(false)
             }
             if tab.playback.canPlay {
                 tab.playback.togglePlay()
@@ -777,6 +1038,62 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         default:
             return nil
         }
+    }
+}
+
+/// Tells a toggle by hand apart from the inspector following the selection.
+private final class WorkspaceSplitViewController: NSSplitViewController {
+    var onToggleInspector: (() -> Void)?
+
+    override func toggleInspector(_ sender: Any?) {
+        onToggleInspector?()
+        super.toggleInspector(sender)
+    }
+}
+
+/// Finder's sound for moving to the Trash. A system sound honors the setting for user interface sound effects.
+private enum TrashSound {
+    private static let sound: SystemSoundID? = {
+        let file = URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/finder/move to trash.aif")
+        var sound: SystemSoundID = 0
+        return AudioServicesCreateSystemSoundID(file as CFURL, &sound) == noErr ? sound : nil
+    }()
+
+    static func play() {
+        if let sound { AudioServicesPlaySystemSound(sound) }
+        #if DEBUG
+        debugPlayedSounds.append("trash=\(sound != nil)")
+        #endif
+    }
+}
+
+/// The date and name fields that make up a project's folder name.
+private struct ProjectForm {
+    let view: NSView
+    let date: NSTextField
+    let name: NSTextField
+
+    init(date dateText: String, name nameText: String) {
+        date = NSTextField(string: dateText)
+        date.placeholderString = "YYYY-MM-DD"
+        name = NSTextField(string: nameText)
+        let todayButton = TodayButton(field: date)
+        let dateRow = NSStackView(views: [date, todayButton])
+        dateRow.spacing = 6
+        date.widthAnchor.constraint(equalToConstant: 144).isActive = true
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Date"), dateRow],
+            [NSTextField(labelWithString: "Name"), name],
+        ])
+        grid.rowSpacing = 8
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).width = 210
+        grid.rowAlignment = .firstBaseline
+        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 52)
+        view = grid
+        date.nextKeyView = todayButton
+        todayButton.nextKeyView = name
+        name.nextKeyView = date
     }
 }
 

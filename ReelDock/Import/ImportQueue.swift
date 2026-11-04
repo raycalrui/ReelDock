@@ -77,8 +77,14 @@ final class ImportQueue {
     /// Moving a folder that's being copied into would strand the rest of the import.
     func isImporting(into folder: URL) -> Bool {
         jobs.contains { job in
-            guard job.state.isActive, case let .folder(url) = job.destination else { return false }
-            return url.path.relocated(from: folder.path, to: "") != nil
+            guard job.state.isActive else { return false }
+            let target: URL?
+            switch job.destination {
+            case let .folder(url): target = url
+            case let .archive(mediaRoot, deviceFolder):
+                target = ImportRouting.archiveFolder(mediaRoot: mediaRoot, clip: job.clip, deviceFolder: deviceFolder)
+            }
+            return target?.path.relocated(from: folder.path, to: "") != nil
         }
     }
 

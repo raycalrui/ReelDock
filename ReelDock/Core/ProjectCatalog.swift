@@ -18,6 +18,8 @@ nonisolated struct ProjectEntry: Identifiable, Hashable, Sendable {
 
 nonisolated enum ProjectCatalog {
     private static let templatePrefix = "00000000_"
+    /// What a new project is copied from, inside the projects folder.
+    static let templateName = "00000000_template"
 
     static func isTemplate(_ folderName: String) -> Bool {
         folderName.hasPrefix(templatePrefix)
@@ -42,10 +44,11 @@ nonisolated enum ProjectCatalog {
 
     /// The folder name for a date and a name, or nil if the date isn't valid.
     /// An empty date leaves the folder undated. Zero for a month or day is allowed, for a project with no exact date yet.
+    /// A name that would read as a template is refused too, since templates aren't listed.
     static func folderName(date: String, name: String) -> String? {
         let digits = date.filter { !"-/. ".contains($0) }
-        guard !digits.isEmpty else { return name }
-        guard digits.count == 8, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber),
+        guard !digits.isEmpty else { return isTemplate(name) ? nil : name }
+        guard digits != "00000000", digits.count == 8, digits.allSatisfy(\.isASCII), digits.allSatisfy(\.isNumber),
               let month = Int(digits.dropFirst(4).prefix(2)), let day = Int(digits.suffix(2)),
               isValid(year: Int(digits.prefix(4)) ?? 0, month: month, day: day) else { return nil }
         return "\(digits)_\(name)"
@@ -66,6 +69,22 @@ nonisolated enum ProjectCatalog {
             return ProjectEntry(url: url, folderName: name, dateStamp: String(digits), title: title.isEmpty ? name : title)
         }
         return ProjectEntry(url: url, folderName: name, dateStamp: nil, title: name)
+    }
+
+    static func filter(_ projects: [ProjectEntry], query: String, tag: String?) -> [ProjectEntry] {
+        let query = query.trimmingCharacters(in: .whitespaces)
+        return projects.filter { project in
+            (query.isEmpty || project.folderName.localizedCaseInsensitiveContains(query))
+                && (tag == nil || project.tags.contains { $0.name == tag })
+        }
+    }
+
+    /// Every tag on the projects, once each, in name order.
+    static func tags(in projects: [ProjectEntry]) -> [FinderTag] {
+        var seen = Set<String>()
+        return projects.flatMap(\.tags)
+            .filter { seen.insert($0.name).inserted }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
     /// Lists projects newest first. Folders without a date follow in name order.

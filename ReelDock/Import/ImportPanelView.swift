@@ -485,16 +485,16 @@ struct ImportActivityButton: View {
             showsDetails.toggle()
         } label: {
             ZStack {
-                if app.queue.isActive {
+                if app.queue.isActive || app.transfers.isActive {
                     ProgressView(value: fraction)
                         .progressViewStyle(.circular)
                         .controlSize(.small)
-                } else if app.queue.failedCount > 0 {
+                } else if app.queue.failedCount > 0 || app.transfers.failedCount > 0 {
                     Image(systemName: "exclamationmark.circle")
                         .foregroundStyle(.orange)
                 } else {
                     Image(systemName: "arrow.down.circle")
-                        .foregroundStyle(app.queue.jobs.isEmpty ? .tertiary : .primary)
+                        .foregroundStyle(isEmpty ? .tertiary : .primary)
                 }
             }
             // The toolbar's glass capsule takes its width from this frame, so it must match its height.
@@ -502,16 +502,31 @@ struct ImportActivityButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .disabled(app.queue.jobs.isEmpty)
-        .help("Import activity")
-        .accessibilityLabel("Import activity")
+        .disabled(isEmpty)
+        .help("Copy activity")
+        .accessibilityLabel("Copy activity")
         .popover(isPresented: $showsDetails, arrowEdge: .bottom) {
-            ImportActivityView(app: app)
+            VStack(spacing: 0) {
+                if !app.transfers.jobs.isEmpty {
+                    TransferActivityView(queue: app.transfers)
+                }
+                if !app.transfers.jobs.isEmpty, !app.queue.jobs.isEmpty {
+                    Divider()
+                }
+                if !app.queue.jobs.isEmpty {
+                    ImportActivityView(app: app)
+                }
+            }
         }
     }
 
+    private var isEmpty: Bool {
+        app.queue.jobs.isEmpty && app.transfers.jobs.isEmpty
+    }
+
     private var fraction: Double {
-        min(1, Double(app.queue.completedBytes) / Double(max(1, app.queue.totalBytes)))
+        guard app.queue.isActive else { return app.transfers.fraction }
+        return min(1, Double(app.queue.completedBytes) / Double(max(1, app.queue.totalBytes)))
     }
 }
 

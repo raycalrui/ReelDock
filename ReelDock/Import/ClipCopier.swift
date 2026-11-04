@@ -98,7 +98,13 @@ nonisolated enum ClipCopier {
         dates[.modificationDate] = attributes[.modificationDate]
         try? FileManager.default.setAttributes(dates, ofItemAtPath: part.path)
 
-        let final = try publish(part, as: source.lastPathComponent, in: folder)
+        let name = source.lastPathComponent
+        let stem = (name as NSString).deletingPathExtension
+        let suffix = (name as NSString).pathExtension
+        let final = try publish(part, in: folder) { attempt in
+            guard attempt > 0 else { return name }
+            return suffix.isEmpty ? "\(stem)_\(attempt)" : "\(stem)_\(attempt).\(suffix)"
+        }
         published = true
         return Output(url: final, sha256: writtenHash, size: expectedSize)
     }
@@ -182,18 +188,10 @@ nonisolated enum ClipCopier {
     }
 
     /// Takes the first free name. `RENAME_EXCL` makes that atomic, so a file that appears meanwhile can't be replaced.
-    private static func publish(_ part: URL, as name: String, in folder: URL) throws -> URL {
-        let stem = (name as NSString).deletingPathExtension
-        let suffix = (name as NSString).pathExtension
+    static func publish(_ part: URL, in folder: URL, name: (Int) -> String) throws -> URL {
         var attempt = 0
         while true {
-            let candidateName: String
-            if attempt == 0 {
-                candidateName = name
-            } else {
-                candidateName = suffix.isEmpty ? "\(stem)_\(attempt)" : "\(stem)_\(attempt).\(suffix)"
-            }
-            let candidate = folder.appendingPathComponent(candidateName)
+            let candidate = folder.appendingPathComponent(name(attempt))
             if renamex_np(part.path, candidate.path, UInt32(RENAME_EXCL)) == 0 {
                 return candidate
             }

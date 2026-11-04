@@ -45,6 +45,69 @@ final class DebugDriver {
         switch parts[0] {
         case "open":
             app.open(URL(fileURLWithPath: parts[1], isDirectory: true), from: controller)
+        case "pasteboard":
+            // pasteboard|path|path: puts files on the test pasteboard. pasteboard alone reports it.
+            guard parts.count > 1 else { return NSPasteboard.files.fileURLs.map(\.path).joined(separator: "\n") }
+            NSPasteboard.files.clearContents()
+            NSPasteboard.files.writeObjects(parts.dropFirst().map { URL(fileURLWithPath: $0) as NSURL })
+        case "transfers":
+            let queue = app.transfers
+            return "active=\(queue.isActive) paused=\(queue.isPaused) bytes=\(queue.copiedBytes)/\(queue.totalBytes) jobs=\(queue.jobs.map { "\($0.sources.map(\.lastPathComponent))->\($0.destination.lastPathComponent) \($0.state) \($0.items.map(\.result.lastPathComponent))" })"
+        case "transferpause":
+            app.transfers.setPaused(parts[safe: 1] != "off")
+        case "transfercancel":
+            app.transfers.cancelAll()
+        case "undo":
+            let manager = controller.window?.undoManager
+            guard manager?.canUndo == true else { return "nothing to undo" }
+            manager?.undo()
+        case "redo":
+            let manager = controller.window?.undoManager
+            guard manager?.canRedo == true else { return "nothing to redo" }
+            manager?.redo()
+        case "headermenu":
+            // headermenu|section title: the header's menu items, and with |index, runs one.
+            guard let pane = content.debugSectionsHost?.stack.panes.first(where: { $0.section.title == parts[1] }) else { return "not found" }
+            guard let menu = pane.header.makeMenu?() else { return "no menu" }
+            if let index = Int(parts[safe: 2] ?? "") { menu.performActionForItem(at: index) }
+            return menu.items.map(\.title).joined(separator: ",")
+        case "columnmenu":
+            // columnmenu|section title|column index: the menu for the selected row.
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            return column.contextMenu().items.map(\.title).filter { !$0.isEmpty }.joined(separator: ",")
+        case "projectmenu":
+            // projectmenu|title|item title: runs an item of the sidebar's menu for a project.
+            guard let project = app.projects.first(where: { $0.title == parts[1] }) else { return "not found" }
+            let menu = controller.folderContextMenu(for: project.url)
+            guard let index = menu.items.firstIndex(where: { $0.title == parts[2] }) else { return "no menu item: \(menu.items.map(\.title))" }
+            menu.performActionForItem(at: index)
+        case "pressbutton":
+            // pressbutton|title: presses a button in the open sheet.
+            guard let button = controller.window?.attachedSheet?.contentView?.debugButtons.first(where: { $0.title == parts[1] }) else { return "no button" }
+            button.performClick(nil)
+        case "focusstate":
+            let responder = controller.window?.firstResponder
+            let table = responder as? BrowserTableView
+            return "responder=\(responder.map { String(describing: type(of: $0)) } ?? "none") column=\(table?.column?.folderURL.lastPathComponent ?? "-") newFolder=\(controller.validateMenuItem(NSMenuItem(title: "", action: #selector(WorkspaceWindowController.newFolder(_:)), keyEquivalent: ""))) paste=\(controller.validateMenuItem(NSMenuItem(title: "", action: #selector(WorkspaceWindowController.paste(_:)), keyEquivalent: ""))) copy=\(controller.validateMenuItem(NSMenuItem(title: "", action: #selector(WorkspaceWindowController.copy(_:)), keyEquivalent: "")))"
+        case "tagfilter":
+            // tagfilter|name: filters this tab's sidebar. tagfilter alone clears it.
+            controller.tab.projectTagFilter = parts[safe: 1]
+            return "shown=\(ProjectCatalog.filter(app.projects, query: "", tag: parts[safe: 1]).map(\.folderName)) tags=\(ProjectCatalog.tags(in: app.projects).map(\.name))"
+        case "settings":
+            // settings|show, clear, or reset.
+            switch parts[safe: 1] {
+            case "show": app.showSettings()
+            case "clear": app.clearMediaRoot()
+            case "reset": app.resetSectionLayout()
+            default: break
+            }
+            return "root=\((app.settings.projectRoot as NSString?)?.lastPathComponent ?? "nil") media=\((app.settings.mediaRoot as NSString?)?.lastPathComponent ?? "nil") sections=\(app.settings.sections.count) hidden=\(app.settings.showHidden) window=\(NSApp.windows.first { $0.title == "Settings" }.map { "\($0.isVisible) \($0.frame.size)" } ?? "none")"
+        case "setmedia":
+            app.debugSetMediaRoot(parts[1])
+        case "sectionstate":
+            return (content.debugSectionsHost?.stack.panes ?? []).map { "\($0.section.title):\($0.count.map(String.init) ?? "-"):\($0.isExpanded ? "open" : "closed")" }.joined(separator: " ")
+        case "blanktab":
+            app.addTab(after: controller)
         case "newtab":
             app.open(URL(fileURLWithPath: parts[1], isDirectory: true), from: controller, newTab: true)
         case "mode":
@@ -53,6 +116,50 @@ final class DebugDriver {
             controller.toggleHiddenFiles(nil)
         case "favorite":
             controller.toggleFavorite(nil)
+        case "drop":
+            // drop|section title|column index|row name or -|all, option, or command|check or perform|paths...
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            let table = column.tableView
+            table.layoutSubtreeIfNeeded()
+            var point = NSPoint(x: 10, y: table.visibleRect.maxY - 2)
+            if parts[3] != "-" {
+                guard let row = column.items.firstIndex(where: { $0.name == parts[3] }) else { return "no row" }
+                let rect = table.rect(ofRow: row)
+                point = NSPoint(x: rect.midX, y: rect.midY)
+            }
+            let info = DebugDragInfo(files: Array(parts.dropFirst(6)), mask: parts[4], location: table.convert(point, to: nil))
+            let operation = column.tableView(table, validateDrop: info, proposedRow: -1, proposedDropOperation: .on)
+            let accepted = parts[5] == "perform" && !operation.isEmpty ? column.tableView(table, acceptDrop: info, row: -1, dropOperation: .on) : false
+            return "operation=\(operation.debugName) accepted=\(accepted)"
+        case "columndrop":
+            // columndrop|section title|column index|all, option, or command|check or perform|paths...: on the column, where the "Empty" label is.
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            let info = DebugDragInfo(files: Array(parts.dropFirst(5)), mask: parts[3], location: .zero)
+            let operation = column.draggingEntered(info)
+            let accepted = parts[4] == "perform" && !operation.isEmpty ? column.performDragOperation(info) : false
+            return "operation=\(operation.debugName) accepted=\(accepted)"
+        case "headerdrop":
+            // headerdrop|section title|all, option, or command|check or perform|paths...
+            guard let pane = content.debugPane(parts[1]) else { return "not found" }
+            let info = DebugDragInfo(files: Array(parts.dropFirst(4)), mask: parts[2], location: .zero)
+            let operation = pane.header.draggingEntered(info)
+            let accepted = parts[3] == "perform" && !operation.isEmpty ? pane.header.performDragOperation(info) : false
+            return "operation=\(operation.debugName) accepted=\(accepted)"
+        case "dragtypes":
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            return "table=\(column.tableView.registeredDraggedTypes.map(\.rawValue)) header=\(content.debugPane(parts[1])?.header.registeredDraggedTypes.map(\.rawValue) ?? [])"
+        case "toggleinspector":
+            let ok = controller.window?.firstResponder?.tryToPerform(#selector(NSSplitViewController.toggleInspector(_:)), with: nil) ?? false
+            return "performed=\(ok)"
+        case "splitwidths":
+            let window = controller.window
+            return "window=\(Int(window?.frame.width ?? 0)) minWindow=\(Int(window?.minSize.width ?? 0)) sidebar=\(Int(controller.debugSidebarView?.frame.width ?? 0)) content=\(Int(content.view.frame.width)) inspector=\(Int(controller.debugInspectorItem?.viewController.view.frame.width ?? 0)) collapsed=\(controller.debugInspectorItem?.isCollapsed ?? false) selection=\(controller.tab.selection.map(\.name))"
+        case "sounds":
+            return "sounds=\(debugPlayedSounds)"
+        case "deselect":
+            // deselect|section title|column index
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            column.tableView.deselectAll(nil)
         case "select":
             // select|section title|column index|row name
             guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0],
@@ -210,6 +317,39 @@ final class DebugDriver {
             name.stringValue = parts[1]
             if parts.count > 2 { date.stringValue = parts[2] }
             button.performClick(nil)
+        case "newprojectsheet":
+            // newprojectsheet|name|date: fills in the open sheet and presses Create. newprojectsheet alone reports it.
+            guard let sheet = controller.window?.attachedSheet,
+                  let fields = sheet.contentView?.debugTextFields.filter(\.isEditable),
+                  let date = fields.first(where: { $0.placeholderString == "YYYY-MM-DD" }),
+                  let name = fields.first(where: { $0 !== date }),
+                  let button = sheet.contentView?.debugButtons.first(where: { $0.title == "Create" }) else { return "no sheet" }
+            let labels = sheet.contentView?.debugTextFields.filter { !$0.isEditable }.map(\.stringValue) ?? []
+            guard parts.count > 1 else { return "date=\(date.stringValue) name=\(name.stringValue) nameFirst=\(sheet.initialFirstResponder === name) labels=\(labels) key=\(button.keyEquivalent == "\r")" }
+            name.stringValue = parts[1]
+            if parts.count > 2 { date.stringValue = parts[2] }
+            button.performClick(nil)
+        case "sheetstate":
+            // Both levels, because a refused new project reports over its still-open sheet.
+            let sheet = controller.window?.attachedSheet
+            let nested = sheet?.attachedSheet
+            return "sheet=\(sheet?.contentView?.debugTextFields.map(\.stringValue) ?? []) nested=\(nested?.contentView?.debugTextFields.map(\.stringValue) ?? [])"
+        case "sheetkey":
+            // sheetkey|return or esc: a real key event through the sheet, focused on its name field.
+            guard let sheet = controller.window?.attachedSheet,
+                  let event = NSEvent.keyEvent(
+                      with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: sheet.windowNumber, context: nil,
+                      characters: parts[1] == "esc" ? "\u{1b}" : "\r", charactersIgnoringModifiers: parts[1] == "esc" ? "\u{1b}" : "\r",
+                      isARepeat: false, keyCode: parts[1] == "esc" ? 53 : 36
+                  ) else { return "no sheet" }
+            // Through the application, which offers it as a key equivalent first, the way a real key arrives.
+            NSApp.activate()
+            sheet.makeKey()
+            NSApp.sendEvent(event)
+            return "keyEquivalent=\(sheet.contentView?.debugButtons.map { "\($0.title):\($0.keyEquivalent.debugDescription)" } ?? []) responder=\(sheet.firstResponder.map { String(describing: type(of: $0)) } ?? "none") default=\(sheet.defaultButtonCell?.title ?? "none")"
+        case "dismissnested":
+            guard let sheet = controller.window?.attachedSheet, let nested = sheet.attachedSheet else { return "no nested sheet" }
+            sheet.endSheet(nested)
         case "renametoday":
             // Presses Today in the open sheet, and reports where the date row's views landed.
             guard let sheet = controller.window?.attachedSheet, let view = sheet.contentView,
@@ -226,7 +366,7 @@ final class DebugDriver {
             try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
         case "renamestate":
             let sheet = controller.window?.attachedSheet
-            return "sheet=\(sheet?.contentView?.debugTextFields.map(\.stringValue) ?? []) projects=\(app.projects.map(\.folderName)) tabs=\(app.controllers.map { $0.tab.folder?.lastPathComponent ?? "blank" }) favorites=\(app.settings.favorites.map { ($0 as NSString).lastPathComponent }) title=\(controller.window?.title ?? "")"
+            return "sheet=\(sheet?.contentView?.debugTextFields.map(\.stringValue) ?? []) projects=\(app.projects.map(\.folderName)) tabs=\(app.controllers.map { $0.tab.folder?.lastPathComponent ?? "blank" }) favorites=\(app.settings.favorites.map { ($0 as NSString).lastPathComponent }) title=\(controller.window?.title ?? "") panels=\(app.controllers.map(\.tab.isImportPanelVisible))"
         case "dismisssheet":
             guard let sheet = controller.window?.attachedSheet else { return "no sheet" }
             controller.window?.endSheet(sheet)
@@ -470,12 +610,17 @@ final class DebugDriver {
             let actions: [String: Selector] = [
                 "new": #selector(WorkspaceWindowController.newFolder(_:)),
                 "rename": #selector(WorkspaceWindowController.renameSelection(_:)),
+                "newproject": #selector(WorkspaceWindowController.newProject(_:)),
+                "copy": #selector(WorkspaceWindowController.copy(_:)),
+                "paste": #selector(WorkspaceWindowController.paste(_:)),
+                "movehere": #selector(WorkspaceWindowController.moveItemsHere(_:)),
                 "trash": #selector(WorkspaceWindowController.moveSelectionToTrash(_:)),
             ]
             guard let action = actions[parts[1]] else { return "unknown" }
             let item = NSMenuItem(title: "", action: action, keyEquivalent: "")
             guard controller.validateMenuItem(item) else { return "disabled" }
-            NSApp.sendAction(action, to: controller, from: item)
+            // Through the responder chain, as a menu does, without needing the app to be in front.
+            guard controller.window?.firstResponder?.tryToPerform(action, with: item) == true else { return "unhandled" }
         case "type":
             // type|new name: commits the rename in progress.
             guard let editor = controller.window?.firstResponder as? NSTextView else { return "not editing" }
@@ -562,6 +707,50 @@ extension ColumnBrowserView {
     func debugScroll(toX x: Double) {
         debugScrollView.contentView.scroll(to: NSPoint(x: x, y: 0))
         debugScrollView.reflectScrolledClipView(debugScrollView.contentView)
+    }
+}
+
+/// Stands in for a real drag, which a script can't start.
+private final class DebugDragInfo: NSObject, NSDraggingInfo {
+    private static var nextSequence = 1
+    let draggingPasteboard = NSPasteboard(name: NSPasteboard.Name("cc.raycal.ReelDock.debugDrag"))
+    let draggingSourceOperationMask: NSDragOperation
+    let draggingLocation: NSPoint
+    let draggingSequenceNumber: Int
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 0
+    var draggingFormation: NSDraggingFormation = .default
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+
+    init(files: [String], mask: String, location: NSPoint) {
+        draggingSourceOperationMask = switch mask {
+        case "option": .copy
+        case "command": .generic
+        default: [.copy, .move, .generic]
+        }
+        draggingLocation = location
+        draggingSequenceNumber = Self.nextSequence
+        Self.nextSequence += 1
+        draggingPasteboard.clearContents()
+        draggingPasteboard.writeObjects(files.map { URL(fileURLWithPath: $0) as NSURL })
+    }
+
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+    func resetSpringLoading() {}
+    func enumerateDraggingItems(options enumOpts: NSDraggingItemEnumerationOptions, for view: NSView?, classes classArray: [AnyClass], searchOptions: [NSPasteboard.ReadingOptionKey: Any], using block: @escaping (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void) {}
+}
+
+private extension NSDragOperation {
+    var debugName: String {
+        if isEmpty { return "none" }
+        if contains(.copy) { return "copy" }
+        if contains(.move) { return "move" }
+        if contains(.generic) { return "generic" }
+        return "other"
     }
 }
 

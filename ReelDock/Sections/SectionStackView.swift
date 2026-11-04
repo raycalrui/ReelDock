@@ -4,6 +4,9 @@ final class SectionHeaderView: NSView {
     var onToggle: (() -> Void)?
     var onMaximize: (() -> Void)?
     var onReveal: (() -> Void)?
+    var makeMenu: (() -> NSMenu?)?
+    var dropOperation: ((any NSDraggingInfo) -> NSDragOperation)?
+    var acceptDrop: ((any NSDraggingInfo) -> Bool)?
 
     private let disclosure = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
@@ -13,6 +16,11 @@ final class SectionHeaderView: NSView {
     private let revealButton = NSButton()
     private let separator = NSBox()
     private var canToggle = true
+    private var isDropTarget = false {
+        didSet {
+            if isDropTarget != oldValue { needsDisplay = true }
+        }
+    }
 
     var tags: [FinderTag] {
         get { tagDots.tags }
@@ -68,6 +76,7 @@ final class SectionHeaderView: NSView {
         separator.boxType = .separator
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
+        registerForDraggedTypes([.fileURL])
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
@@ -87,6 +96,10 @@ final class SectionHeaderView: NSView {
         // Fill bounds, not dirtyRect: dirtyRect can extend past the view and would paint over other sections.
         NSColor.windowBackgroundColor.setFill()
         bounds.fill()
+        if isDropTarget {
+            NSColor.controlAccentColor.withAlphaComponent(0.25).setFill()
+            bounds.fill()
+        }
     }
 
     func update(count: Int?, expanded: Bool) {
@@ -109,6 +122,36 @@ final class SectionHeaderView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if event.clickCount == 1, canToggle { onToggle?() }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        makeMenu?()
+    }
+
+    // MARK: Drop
+
+    /// The way to drop into a section that's collapsed or empty, since neither shows a column.
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        updateDrop(sender)
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        updateDrop(sender)
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        isDropTarget = false
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        isDropTarget = false
+        return acceptDrop?(sender) ?? false
+    }
+
+    private func updateDrop(_ info: any NSDraggingInfo) -> NSDragOperation {
+        let operation = dropOperation?(info) ?? []
+        isDropTarget = !operation.isEmpty
+        return operation
     }
 
     @objc private func maximize() { onMaximize?() }

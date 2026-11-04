@@ -1,14 +1,21 @@
 import AppKit
 import Observation
+import SwiftUI
 
 @Observable
 final class TabModel {
     var folder: URL?
     var mode: BrowserMode = .sections
     var selection: [FolderItem] = [] {
-        didSet { playback.follow(selection) }
+        didSet {
+            playback.follow(selection)
+            onSelectionChange?()
+        }
     }
+    @ObservationIgnored var onSelectionChange: (() -> Void)?
     let playback = PlaybackController()
+    /// Limits the sidebar's project list to one tag.
+    var projectTagFilter: String?
     var isImportPanelVisible = false
     var importCardID: String?
 }
@@ -30,10 +37,12 @@ final class AppModel {
 
     let cards: CardMonitor
     let queue: ImportQueue
+    let transfers: FileTransferQueue
 
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private var rootWatcher: FolderWatcher?
     @ObservationIgnored private var saveWork: DispatchWorkItem?
+    @ObservationIgnored private var settingsWindow: NSWindow?
     @ObservationIgnored private var knownCardIDs: Set<String> = []
     @ObservationIgnored private var hasReadCards = false
     /// Cards on their way out. A card stays here until it leaves the list, so nothing can start on it meanwhile.
@@ -53,6 +62,7 @@ final class AppModel {
         let monitor = CardMonitor(ledger: ledger) { currentRoots?() ?? (nil, nil) }
         cards = monitor
         queue = ImportQueue(ledger: ledger, registry: registry, cards: monitor)
+        transfers = FileTransferQueue(registry: registry)
         currentRoots = { [weak self] in (self?.projectRootURL, self?.mediaRootURL) }
 
         monitor.onCardsChanged = { [weak self] in self?.cardsDidChange($0) }
@@ -396,21 +406,64 @@ final class AppModel {
         url.deletingLastPathComponent().path == projectRootURL?.path
     }
 
+    var canCreateProject: Bool {
+        projectRootURL != nil && !projectRootIsMissing
+    }
+
+    /// Opens a project just created from a tab. A card panel open there comes along, since clips usually go in next.
+    func openNewProject(_ url: URL, from controller: WorkspaceWindowController?) {
+        reloadProjects()
+        open(url, from: controller, newTab: true)
+        guard let controller, controller.tab.isImportPanelVisible,
+              let target = self.controller(showing: url), target !== controller else { return }
+        target.showImportPanel(cardID: controller.tab.importCardID)
+    }
+
     /// Renames a project's folder and carries along everything that points into it.
     func renameProject(at url: URL, toFolderName name: String) throws -> URL {
-        guard !queue.isImporting(into: url) else { throw FileOperationError.importing }
-        // An open clip would keep playing from the old path, and then fail to reload.
-        controllers.forEach { $0.tab.playback.release(under: url) }
+        guard !isBusy(url) else { throw FileOperationError.importing }
+        releasePlayback(under: url)
         let renamed = try FileOperations.rename(url, to: name)
         guard renamed != url else { return url }
-        let (old, new) = (url.path, renamed.path)
+        folderDidMove(from: url, to: renamed)
+        return renamed
+    }
+
+    /// Moving a folder that's being copied into, or out of, would strand the rest of that copy.
+    func isBusy(_ url: URL) -> Bool {
+        queue.isImporting(into: url) || transfers.isBusy(with: url)
+    }
+
+    /// An open clip would keep playing from the old path, and then fail to reload.
+    func releasePlayback(under url: URL) {
+        controllers.forEach { $0.tab.playback.release(under: url) }
+    }
+
+    /// Carries along everything that points into a folder that moved.
+    func folderDidMove(from url: URL, to moved: URL) {
+        let (old, new) = (url.path, moved.path)
         settings.favorites = settings.favorites.map { $0.relocated(from: old, to: new) ?? $0 }
         controllers.forEach { $0.folderDidMove(from: old, to: new) }
         reloadProjects()
         cards.refreshPresence()
         // Later, so the tabs have reopened their folders by then.
         scheduleSessionSave()
-        return renamed
+    }
+
+    /// Takes favorites and tabs off a project on its way to the Trash. Returns the favorites as they were, for undo.
+    func willTrashProject(at url: URL) -> [String] {
+        releasePlayback(under: url)
+        let previous = settings.favorites
+        settings.favorites.removeAll { $0.relocated(from: url.path, to: "") != nil }
+        for controller in controllers where controller.tab.folder?.path.relocated(from: url.path, to: "") != nil {
+            controller.folderDidDisappear()
+        }
+        return previous
+    }
+
+    func restoreFavorites(_ favorites: [String]) {
+        settings.favorites = favorites
+        scheduleSessionSave()
     }
 
     func toggleFavorite(_ url: URL) {
@@ -465,6 +518,46 @@ final class AppModel {
         settings.showHidden.toggle()
         saveNow()
         controllers.forEach { $0.content.reloadFolderContents() }
+    }
+
+    // MARK: Settings
+
+    func showSettings() {
+        if settingsWindow == nil {
+            let host = NSHostingController(rootView: SettingsView(app: self))
+            host.sizingOptions = .preferredContentSize
+            let window = NSWindow(contentViewController: host)
+            window.title = "Settings"
+            window.styleMask = [.titled, .closable]
+            window.tabbingMode = .disallowed
+            window.isRestorable = false
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsWindow = window
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    #if DEBUG
+    func debugSetMediaRoot(_ path: String) {
+        settings.mediaRoot = path
+    }
+    #endif
+
+    func clearMediaRoot() {
+        settings.mediaRoot = nil
+        saveNow()
+        cards.refreshPresence()
+    }
+
+    /// Open tabs rebuild, so the change shows right away.
+    func resetSectionLayout() {
+        settings.sections = [:]
+        saveNow()
+        for controller in controllers {
+            guard let folder = controller.tab.folder else { continue }
+            controller.show(folder: folder, mode: controller.tab.mode, restoring: controller.content.snapshot())
+        }
     }
 
     // MARK: Session

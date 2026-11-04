@@ -1,5 +1,21 @@
 import AppKit
 
+extension NSPasteboard {
+    /// Where files are copied to and pasted from. Test runs can use their own, so they leave the real clipboard alone.
+    static var files: NSPasteboard {
+        #if DEBUG
+        if let name = ProcessInfo.processInfo.environment["REELDOCK_PASTEBOARD"] {
+            return NSPasteboard(name: NSPasteboard.Name(name))
+        }
+        #endif
+        return .general
+    }
+
+    var fileURLs: [URL] {
+        readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+    }
+}
+
 /// A table that reports focus and handles Finder's column-view keys.
 final class BrowserTableView: NSTableView {
     weak var column: BrowserColumnView?
@@ -38,10 +54,6 @@ final class BrowserTableView: NSTableView {
             selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
         }
         return column?.contextMenu()
-    }
-
-    @objc func copy(_ sender: Any?) {
-        column?.copySelectionToPasteboard()
     }
 }
 
@@ -184,9 +196,12 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         tableView.column = self
         tableView.target = self
         tableView.doubleAction = #selector(handleDoubleClick)
-        // Dragging out is limited to copy and link until file operations exist.
+        // Dragging out of the app can't move files. Generic is what the Command key asks for.
         tableView.setDraggingSourceOperationMask([.copy, .link], forLocal: false)
-        tableView.setDraggingSourceOperationMask([.copy, .link], forLocal: true)
+        tableView.setDraggingSourceOperationMask(FileOperations.isOnCameraCard(folderURL) ? .copy : [.copy, .move, .generic], forLocal: true)
+        tableView.registerForDraggedTypes([.fileURL])
+        // The "Empty" label sits above the table, and would otherwise block a drop on it.
+        registerForDraggedTypes([.fileURL])
 
         scrollView.documentView = tableView
         scrollView.automaticallyAdjustsContentInsets = false
@@ -404,6 +419,42 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         items[row].url as NSURL
     }
 
+    // MARK: Drop
+
+    /// A folder row takes the drop. Anywhere else in the column means this column's folder.
+    private func dropTarget(_ info: any NSDraggingInfo) -> (row: Int, folder: URL) {
+        let row = tableView.row(at: tableView.convert(info.draggingLocation, from: nil))
+        if row >= 0, row < items.count, items[row].isFolder {
+            return (row, items[row].url)
+        }
+        return (-1, folderURL)
+    }
+
+    func tableView(_ tableView: NSTableView, validateDrop info: any NSDraggingInfo, proposedRow row: Int, proposedDropOperation dropOperation: NSTableView.DropOperation) -> NSDragOperation {
+        let target = dropTarget(info)
+        let operation = browser?.host?.dropOperation(info, into: target.folder) ?? []
+        if !operation.isEmpty {
+            tableView.setDropRow(target.row, dropOperation: .on)
+        }
+        return operation
+    }
+
+    func tableView(_ tableView: NSTableView, acceptDrop info: any NSDraggingInfo, row: Int, dropOperation: NSTableView.DropOperation) -> Bool {
+        browser?.host?.acceptDrop(info, into: dropTarget(info).folder) ?? false
+    }
+
+    override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        browser?.host?.dropOperation(sender, into: folderURL) ?? []
+    }
+
+    override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        browser?.host?.dropOperation(sender, into: folderURL) ?? []
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        browser?.host?.acceptDrop(sender, into: folderURL) ?? false
+    }
+
     // MARK: Actions
 
     @objc private func handleDoubleClick() {
@@ -428,18 +479,27 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     func copySelectionToPasteboard() {
         let urls = selectedItems.map { $0.url as NSURL }
         guard !urls.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.writeObjects(urls)
+        NSPasteboard.files.clearContents()
+        NSPasteboard.files.writeObjects(urls)
     }
 
     /// For a click on the column's empty space.
     func backgroundMenu() -> NSMenu? {
-        guard filter == .all, !FileOperations.isOnCameraCard(folderURL) else { return nil }
+        guard !FileOperations.isOnCameraCard(folderURL) else { return nil }
         let menu = NSMenu()
-        let item = NSMenuItem(title: "New Folder", action: #selector(contextNewFolder), keyEquivalent: "")
-        item.target = self
-        menu.addItem(item)
-        return menu
+        if filter == .all {
+            let item = NSMenuItem(title: "New Folder", action: #selector(contextNewFolder), keyEquivalent: "")
+            item.target = self
+            menu.addItem(item)
+        }
+        addPasteItems(to: menu, into: folderURL)
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    private func addPasteItems(to menu: NSMenu, into folder: URL) {
+        guard let host = browser?.host, host.canPasteFiles else { return }
+        menu.addItem(.closure("Paste") { [weak host] in host?.transferPastedFiles(.copy, into: folder) })
+        menu.addItem(.closure("Move Here") { [weak host] in host?.transferPastedFiles(.move, into: folder) })
     }
 
     func contextMenu() -> NSMenu {
@@ -461,6 +521,7 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         }
         menu.addItem(.separator())
         add("Reveal in Finder", #selector(contextReveal))
+        add("Copy", #selector(contextCopy))
         add("Copy Path", #selector(contextCopyPath))
         if !FileOperations.isOnCameraCard(folderURL) {
             menu.addItem(.separator())
@@ -471,6 +532,9 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
                 add("Rename", #selector(contextRename))
             }
             add("Move to Trash", #selector(contextTrash))
+            if let target = browser?.pasteFolder {
+                addPasteItems(to: menu, into: target)
+            }
             if !selection.isEmpty {
                 menu.addItem(.separator())
                 browser?.host?.addTagItems(to: menu, for: selection.map(\.url))
@@ -509,6 +573,10 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     @objc private func contextReveal() {
         NSWorkspace.shared.activateFileViewerSelecting(selectedItems.map(\.url))
+    }
+
+    @objc private func contextCopy() {
+        copySelectionToPasteboard()
     }
 
     @objc private func contextCopyPath() {

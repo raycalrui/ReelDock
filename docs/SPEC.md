@@ -32,7 +32,8 @@ Status: draft for review. Milestone 1 is implemented and awaiting hands-on accep
 - **Default state:** when a folder has numbered sections, only `output`, `video`, and `cover` start open. A folder with no numbered sections starts with everything open. Toggling a section is remembered by name.
 - **Clicking anywhere on a section's header** toggles it, except on its buttons. A maximize button gives that section most of the height, and pressing it again restores the layout. Heights and collapsed states are remembered by section name, so `3 video` behaves alike across projects.
 - **Selection** is one per tab, across all sections. Selecting in another section clears the previous selection.
-- **The inspector** is shared and can be hidden. It replaces Finder's per-browser preview column, which would not fit in a short section. It is 440 pt wide by default and can be dragged from 280 to 760 pt.
+- **The inspector** is shared. It replaces Finder's per-browser preview column, which would not fit in a short section. It is 440 pt wide by default and can be dragged from 280 to 760 pt.
+- **The inspector follows the selection:** it shows when something is selected and hides when nothing is, after a short delay so that a delete or a refresh doesn't flash it. Hiding it by hand with something selected keeps it hidden in that tab until it's shown by hand or with Space.
 - **A section's columns scroll sideways** with a two-finger swipe or Shift and a mouse wheel, even with the pointer over a column.
 
 ## 2. Folders and sections
@@ -59,7 +60,7 @@ Project list rules:
 
 - Projects are the direct subfolders of the chosen root, newest first by the date in the name.
 - `00000000_*` folders are templates and are not listed.
-- Projects can be filtered by name and by tag.
+- Projects can be filtered by name, and by one tag from the menu beside the filter field. A tag no project has any more stops filtering.
 - Opening a project that is already open switches to its tab.
 
 Contents load only when they are shown. Real projects can contain Python environments, Git repositories, and deep proxy trees, so nothing scans a whole project in order to display it.
@@ -79,7 +80,7 @@ Listed in this order, because the project list is the longest:
 - **Favorites:** any folder or project, added by button or drag, and reorderable.
 - **Projects:** the chosen root's list, with a filter field.
 
-Clicking opens the folder in the current tab, or switches to its tab if it is already open. Command-click or the context menu opens a new tab.
+Clicking opens the folder in the current tab, or switches to its tab if it is already open. Command-click or the context menu opens a new tab. Opening a folder gives the browser keyboard focus, so the arrow keys and file commands work right away. A folder whose sections are all empty has nothing to focus.
 
 ## Preview and playback
 
@@ -108,15 +109,21 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | --- | --- |
 | Open / Open With | Default app, or chosen app |
 | Space | Plays or pauses the selection in the inspector. See "Preview and playback". |
-| Drag out | Real file URLs, usable by DaVinci Resolve and Finder. Copy and link only until milestone 3, so dragging can't move files. |
-| Drag in, or between sections | Move on the same volume, copy across volumes (Option forces copy), as in Finder |
+| Drag out of the app | Real file URLs, usable by DaVinci Resolve and Finder. Copy and link only, so dragging out can't move files. Finder currently makes an alias. |
+| Drag within the app, or in from Finder | Drop on a folder row to go inside it, anywhere else in a column to go into that column's folder, or on a section header, which is the way into a collapsed or empty section. Moves on the same volume and copies across volumes. Option forces a copy, and Command forces a move. Goes through the same verified copy, queue, naming, and undo as paste. A card's files are only copied, and nothing can be dropped on a card. |
 | Rename | Inline, with `Return`. A taken name is refused, never replaced. |
 | Rename a project | **Rename…** in the sidebar's context menu edits the project's date and name, which make up its `YYYYMMDD_name` folder name. **Today** fills in the current date, and clearing the date leaves it undated. Open tabs and favorites follow, and `⌘Z` undoes it. Refused while importing into that project. |
 | New folder | `⇧⌘N` creates it inside the selected folder, or in the current column if none is selected. The column's context menu creates it in that column. The name starts in edit mode. |
-| Copy, paste, move | Standard shortcuts |
-| Delete | `⌘⌫` moves to Trash, with no permanent delete. The next file is then selected. |
-| Undo | `⌘Z` undoes a new folder, a rename, or a move to Trash. Putting a file back never replaces one created since. |
-| Camera cards | All of the above are unavailable on a camera card, in any folder view |
+| Copy | `⌘C` puts the selected files on the clipboard, so they can also be pasted in Finder. Available on a camera card. |
+| Paste | `⌘V` copies clipboard files, from ReelDock or Finder, inside the selected folder or into the current column. Pasting a folder that's still selected copies it beside itself. A section header's context menu pastes into that section, including an empty one. Every file is verified as in "Copy pipeline", and Finder tags, permissions, and dates carry over. |
+| Move Here | `⌥⌘V` moves clipboard files to the same place. Within a volume it's a rename. Across volumes the files are copied and verified, and then the originals go to the Trash. If that fails, both are kept and an alert says so. |
+| Taken names | Nothing is replaced. A paste becomes `clip copy.mp4`, then `clip copy 2.mp4`. A move becomes `clip 2.mp4`. The activity popover shows the name used. |
+| Progress | Pastes and moves run in the background one at a time, in the same toolbar popover as imports, with pause and cancel. A failure shows an alert, and quitting asks first. Cancelling or a failure leaves no partial item. |
+| Busy folders | A folder can't be renamed, moved, or trashed while files are being imported or copied into it, or copied or moved out of it. An alert says why. Other files beside it are unaffected. |
+| Move a project to the Trash | **Move to Trash…** in the sidebar's context menu asks first. Tabs showing it go blank and it leaves Favorites. `⌘Z` puts it back and restores both. |
+| Delete | `⌘⌫` moves to Trash, with no permanent delete, and plays Finder's Trash sound, which follows the system's setting for user interface sound effects. The next file is then selected. |
+| Undo | `⌘Z` undoes a new folder, a rename, a move to Trash, a paste, or a move. Undoing a paste sends the copies to the Trash. Undoing a move across volumes puts the originals back and sends the copies to the Trash, and can't be redone. Putting a file back never replaces one created since. |
+| Camera cards | All of the above except copying are unavailable on a camera card, in any folder view |
 | Reveal in Finder | Available on every item |
 
 Changes made outside the app appear automatically through FSEvents.
@@ -258,10 +265,13 @@ Measured on a freshly mounted 1.2 GB simulated card on the internal SSD: `cp` to
 
 ## 8. New project
 
-- Duplicates `<root>/00000000_template` as `<root>/YYYYMMDD_<name>`, with today's date as an editable default. The template's `.DS_Store` is not copied.
-- Does **not** copy a `.drp` file into `0 project`.
-- Opens the new project in a new tab.
-- If the name already exists, stay in the dialog and report it.
+- **New Project…** is in the File menu (`⌥⌘N`), beside the sidebar's filter field, and on the new-tab page. It asks for a date and a name, with today's date as an editable default.
+- Copies `<root>/00000000_template` to `<root>/YYYYMMDD_<name>`. Clearing the date leaves it undated. The copy's `.DS_Store` and `.drp` files are left out, and its dates are set to now.
+- If there is no template folder, the dialog says so and the project starts empty.
+- The copy is built under a hidden name and renamed into place once complete, so a failed copy leaves nothing behind and nothing is overwritten.
+- Opens the new project in a new tab, or in the current tab if that one is blank. A card panel open in the current tab opens in the new tab too.
+- If the name is taken or the date isn't valid, stay in the dialog and report it.
+- Not undoable, since footage may be imported straight away and `⌘Z` shouldn't move that to Trash. Rename fixes a typo.
 
 ## 9. Stored data
 
@@ -274,12 +284,16 @@ Everything is in `~/Library/Application Support/ReelDock/`:
 
 The ledger is append-only plain text, so it can be inspected and backed up easily. Nothing is written into project folders or onto cards.
 
-## 10. System access
+## 10. Settings
+
+**Settings…** (`⌘,`) shows the projects folder and personal archive, each with **Choose…**, and the archive with **Clear**. It also has **Show hidden files**, and **Reset** for the section layout, which returns heights and collapsed sections to their defaults in open tabs too.
+
+## 11. System access
 
 - macOS will ask for access to the Desktop folder and to removable volumes, because projects live under `~/Desktop/video`.
 - Builds need a stable code signature, or macOS asks again after each rebuild. A valid signing identity already exists on this Mac.
 
-## 11. Updates
+## 12. Updates
 
 - Sparkle checks for updates once a day, and **Check for Updates…** in the app menu checks right away. Nothing installs without asking.
 - Releases are Developer ID signed and notarized DMGs on GitHub. `appcast.xml` on `main` lists them, and both are checked against an EdDSA key.

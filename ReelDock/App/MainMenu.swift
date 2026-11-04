@@ -37,8 +37,7 @@ enum MainMenu {
             item("About ReelDock", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             UpdateController.shared.menuItem(),
             .separator(),
-            item("Choose Projects Folder…", #selector(WorkspaceWindowController.chooseProjectRoot(_:))),
-            item("Choose Personal Archive Folder…", #selector(WorkspaceWindowController.chooseMediaRoot(_:))),
+            item("Settings…", #selector(AppDelegate.showSettings(_:)), ","),
             .separator(),
             item("Hide ReelDock", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
@@ -50,6 +49,7 @@ enum MainMenu {
 
     private static func fileItems() -> [NSMenuItem] {
         [
+            item("New Project…", #selector(WorkspaceWindowController.newProject(_:)), "n", [.command, .option]),
             item("New Tab", #selector(NSResponder.newWindowForTab(_:)), "t"),
             item("New Window", #selector(AppDelegate.newWindow(_:)), "n"),
             item("Open Folder…", #selector(WorkspaceWindowController.openFolder(_:)), "o"),
@@ -74,6 +74,7 @@ enum MainMenu {
             item("Cut", #selector(NSText.cut(_:)), "x"),
             item("Copy", #selector(NSText.copy(_:)), "c"),
             item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Move Here", #selector(WorkspaceWindowController.moveItemsHere(_:)), "v", [.command, .option]),
             item("Select All", #selector(NSResponder.selectAll(_:)), "a"),
         ]
     }

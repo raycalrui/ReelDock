@@ -22,6 +22,8 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
     private var watcher: FolderWatcher?
     private var activeBrowser: ColumnBrowserView?
     private var loadGeneration = 0
+    /// Set when a folder opens, so a later refresh doesn't take focus from what's being typed.
+    private var needsFocus = false
 
     init(app: AppModel, tab: TabModel) {
         self.app = app
@@ -56,6 +58,7 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
 
     func display(restoring snapshot: TabSnapshot? = nil) {
         loadGeneration += 1
+        needsFocus = true
         clearContent()
         watcher = nil
         tab.selection = []
@@ -169,6 +172,10 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         }
         host.stack.setPanes(panes)
         host.needsLayout = true
+        if needsFocus {
+            needsFocus = false
+            focusContent()
+        }
 
         for pane in created {
             let path = snapshot?.openPaths[pane.section.id] ?? []
@@ -192,6 +199,20 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         }
         pane.header.onReveal = {
             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: section.url.path)
+        }
+        // The way to paste into a section that's empty, since an empty section doesn't open.
+        pane.header.makeMenu = { [weak self] in
+            guard let self, self.canPasteFiles, !FileOperations.isOnCameraCard(section.url) else { return nil }
+            let menu = NSMenu()
+            menu.addItem(.closure("Paste") { [weak self] in self?.transferPastedFiles(.copy, into: section.url) })
+            menu.addItem(.closure("Move Here") { [weak self] in self?.transferPastedFiles(.move, into: section.url) })
+            return menu
+        }
+        pane.header.dropOperation = { [weak self] info in
+            self?.dropOperation(info, into: section.url) ?? []
+        }
+        pane.header.acceptDrop = { [weak self] info in
+            self?.acceptDrop(info, into: section.url) ?? false
         }
         return pane
     }
@@ -401,6 +422,22 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         windowController?.renameItem(at: url, to: name)
     }
 
+    var canPasteFiles: Bool {
+        !NSPasteboard.files.fileURLs.isEmpty
+    }
+
+    func transferPastedFiles(_ kind: FileTransfer.Kind, into folder: URL) {
+        windowController?.transferPastedFiles(kind, into: folder)
+    }
+
+    func dropOperation(_ info: any NSDraggingInfo, into folder: URL) -> NSDragOperation {
+        windowController?.dropOperation(info, into: folder) ?? []
+    }
+
+    func acceptDrop(_ info: any NSDraggingInfo, into folder: URL) -> Bool {
+        windowController?.acceptDrop(info, into: folder) ?? false
+    }
+
     func moveToTrash(_ urls: [URL]) async {
         await windowController?.moveToTrash(urls)
     }
@@ -425,8 +462,12 @@ private struct EmptyTabView: View {
                 Button("Choose Projects Folder…") { app.chooseProjectRoot(from: controller) }
                     .controlSize(.large)
             } else {
-                Button("Open Folder…") { controller?.openFolder(nil) }
-                    .controlSize(.large)
+                HStack(spacing: 12) {
+                    Button("New Project…") { controller?.promptNewProject() }
+                        .disabled(!app.canCreateProject)
+                    Button("Open Folder…") { controller?.openFolder(nil) }
+                }
+                .controlSize(.large)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -454,9 +495,12 @@ private struct ProjectPickerView: View {
                 .frame(maxWidth: .infinity)
             }
             .ignoresSafeArea(.container, edges: .top)
-            Button("Open Folder…") { controller?.openFolder(nil) }
-                .controlSize(.large)
-                .padding(.bottom, 16)
+            HStack(spacing: 12) {
+                Button("New Project…") { controller?.promptNewProject() }
+                Button("Open Folder…") { controller?.openFolder(nil) }
+            }
+            .controlSize(.large)
+            .padding(.bottom, 16)
         }
     }
 }

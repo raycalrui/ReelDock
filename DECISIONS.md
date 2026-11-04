@@ -2,6 +2,18 @@
 
 Lasting choices and why they were made. Dates are absolute.
 
+## 2026-11-04: Pastes use the import pipeline, not `FileManager.copyItem`
+
+Footage may not exist anywhere else, so every pasted file is hashed, read back, and verified like an import, and a folder appears only once all of it is done. This costs some time on large copies. The originals of a move across volumes go to the Trash rather than being deleted, so a mistake can still be undone.
+
+## 2026-11-04: Taken names get a new name without asking
+
+The media rules allow a new name or an explicit choice. A new name keeps a batch moving, and the activity popover reports it. Replacing is not offered at all.
+
+## 2026-11-04: New projects can't be undone with `⌘Z`
+
+Footage is often imported straight after creating a project, and imports aren't on the undo stack, so `⌘Z` could send freshly imported footage to the Trash. Rename fixes a typo.
+
 ## 2026-11-03: Sections stacked vertically, each a column browser
 
 Requested by Raycal. Sections fit the window in a split view rather than sitting in an outer scroll view, because a scrolling page containing scrolling columns traps the pointer. To be checked on a real project early in milestone 1.
@@ -129,3 +141,11 @@ Replacing a running app safely, and checking that a download really came from us
 ## A card opens its panel when it appears
 
 The panel exists only while a card is present, so it opens on insertion and closes when the last card leaves. Only a newly seen card opens it, including one already inserted when the app launches, so closing the panel stays closed until a card is inserted again. It opens in the front window only.
+
+## The inspector follows the selection
+
+An empty inspector only takes width from the browser, so it hides when nothing is selected and returns with a selection. Hiding it by hand with something selected is a choice about that tab, so it stays hidden until it's shown again. The window's minimum width now fits all three panes, so showing the inspector doesn't have to resize the window.
+
+## Dragging uses Finder's rules, and paste's machinery
+
+A drag within the app moves on one volume and copies across volumes, with Option and Command overriding that, because that's what the hands already expect. It runs through the same transfer queue as paste, so verification, naming, undo, and the card rules don't have a second implementation. A drop on a section header exists because a collapsed or empty section has no column to drop on.
