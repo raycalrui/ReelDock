@@ -6,6 +6,16 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>ReelDock</title>
         <item>
+            <title>0.1.2</title>
+            <pubDate>Wed, 04 Nov 2026 20:32:49 +0800</pubDate>
+            <link>https://github.com/raycalrui/ReelDock/releases/tag/v0.1.2</link>
+            <sparkle:fullReleaseNotesLink>https://github.com/raycalrui/ReelDock/releases/tag/v0.1.2</sparkle:fullReleaseNotesLink>
+            <sparkle:version>3</sparkle:version>
+            <sparkle:shortVersionString>0.1.2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>26.0</sparkle:minimumSystemVersion>
+            <enclosure url="https://github.com/raycalrui/ReelDock/releases/download/v0.1.2/ReelDock-0.1.2.dmg" length="4843499" type="application/octet-stream" sparkle:edSignature="hp1OoCXIde/rMFwIsWN5KrytDpNAqL/CYBUsQr0Fp0LsrB1xxnHnCpg8TBdv8qUtM2Xmj6S98T99wL3i6+mZAQ=="/>
+        </item>
+        <item>
             <title>0.1.1</title>
             <pubDate>Wed, 04 Nov 2026 00:42:53 +0800</pubDate>
             <link>https://github.com/raycalrui/ReelDock/releases/tag/v0.1.1</link>
@@ -28,6 +38,6 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: YTgwEUSjpuBsRv+b4K8cKtaFYEItrmHa9wqEErMSjho2V2KKOXOTfnw2XagLxjhdkVXJqFzDCoUqdlXyX/xGCw==
-length: 2064
+edSignature: ukUyQq7oWR87zW41zwcpteDwHZ0zh2oOnN1ADIOju9Upc2NkLB0ikhBhH5V5zwB9XAFfnCvXhlCaIYIV8HuGAQ==
+length: 2880
 -->
