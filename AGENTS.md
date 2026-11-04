@@ -6,7 +6,7 @@ These rules apply to agents working in this repository unless the user explicitl
 
 - ReelDock is a native macOS app for managing video project folders and importing from camera cards. It is built for Raycal's own workflow first.
 - Use English for UI, code comments, filenames, documentation, and commit messages. Communicate with Raycal in Simplified Chinese.
-- The README and release notes are in both English and Simplified Chinese. `README.zh-CN.md` mirrors `README.md`, so change them together.
+- The README and release notes are in both English and Simplified Chinese. The README is one file, with each passage or list item in English followed by its Chinese.
 - `docs/SPEC.md` defines intended behavior. Implement only what is selected in `TODO.md`; other ideas stay as candidates.
 
 ## Before changes
@@ -54,7 +54,7 @@ Client and project names, footage, and device serial numbers stay out of the rep
 ## Documentation
 
 - Track milestones in `TODO.md`, and mark an item done only after implementation and proportionate verification.
-- Record lasting choices in `DECISIONS.md`. Update both READMEs when capabilities or limitations change.
+- Record lasting choices in `DECISIONS.md`. Update `README.md` when capabilities or limitations change, in both languages.
 - Describe current facts. Do not equate planned, built, verified on a real card, signed, and released.
 
 ## Git
