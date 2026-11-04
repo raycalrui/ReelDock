@@ -13,6 +13,29 @@ nonisolated struct TabSnapshot: Codable, Equatable, Sendable {
     var openPaths: [String: [String]]
 }
 
+nonisolated extension TabSnapshot {
+    /// The same tab after a folder it's inside moved, or nil if it isn't inside that folder.
+    func relocated(from old: String, to new: String) -> TabSnapshot? {
+        guard let folder = folderPath.relocated(from: old, to: new) else { return nil }
+        var moved = self
+        moved.folderPath = folder
+        // A section's ID is its folder's path, so the keys move too.
+        moved.openPaths = Dictionary(uniqueKeysWithValues: openPaths.map { key, paths in
+            (key.relocated(from: old, to: new) ?? key, paths.map { $0.relocated(from: old, to: new) ?? $0 })
+        })
+        return moved
+    }
+}
+
+extension String {
+    /// This path after the folder at `old` moved to `new`, or nil if it isn't that folder or inside it.
+    nonisolated func relocated(from old: String, to new: String) -> String? {
+        if self == old { return new }
+        guard hasPrefix(old + "/") else { return nil }
+        return new + dropFirst(old.count)
+    }
+}
+
 nonisolated struct WindowSnapshot: Codable, Equatable, Sendable {
     var tabs: [TabSnapshot]
     var selectedTab: Int

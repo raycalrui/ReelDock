@@ -74,6 +74,14 @@ final class ImportQueue {
 
     var isActive: Bool { jobs.contains { $0.state.isActive } }
 
+    /// Moving a folder that's being copied into would strand the rest of the import.
+    func isImporting(into folder: URL) -> Bool {
+        jobs.contains { job in
+            guard job.state.isActive, case let .folder(url) = job.destination else { return false }
+            return url.path.relocated(from: folder.path, to: "") != nil
+        }
+    }
+
     func isActive(cardID: String) -> Bool {
         jobs.contains { $0.cardID == cardID && $0.state.isActive }
     }

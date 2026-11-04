@@ -111,6 +111,7 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | Drag out | Real file URLs, usable by DaVinci Resolve and Finder. Copy and link only until milestone 3, so dragging can't move files. |
 | Drag in, or between sections | Move on the same volume, copy across volumes (Option forces copy), as in Finder |
 | Rename | Inline, with `Return`. A taken name is refused, never replaced. |
+| Rename a project | **Rename…** in the sidebar's context menu edits the project's date and name, which make up its `YYYYMMDD_name` folder name. **Today** fills in the current date, and clearing the date leaves it undated. Open tabs and favorites follow, and `⌘Z` undoes it. Refused while importing into that project. |
 | New folder | `⇧⌘N` creates it inside the selected folder, or in the current column if none is selected. The column's context menu creates it in that column. The name starts in edit mode. |
 | Copy, paste, move | Standard shortcuts |
 | Delete | `⌘⌫` moves to Trash, with no permanent delete. The next file is then selected. |

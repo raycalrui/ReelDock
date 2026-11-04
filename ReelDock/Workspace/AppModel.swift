@@ -392,6 +392,27 @@ final class AppModel {
         settings.favorites.contains(url.path)
     }
 
+    func isProject(_ url: URL) -> Bool {
+        url.deletingLastPathComponent().path == projectRootURL?.path
+    }
+
+    /// Renames a project's folder and carries along everything that points into it.
+    func renameProject(at url: URL, toFolderName name: String) throws -> URL {
+        guard !queue.isImporting(into: url) else { throw FileOperationError.importing }
+        // An open clip would keep playing from the old path, and then fail to reload.
+        controllers.forEach { $0.tab.playback.release(under: url) }
+        let renamed = try FileOperations.rename(url, to: name)
+        guard renamed != url else { return url }
+        let (old, new) = (url.path, renamed.path)
+        settings.favorites = settings.favorites.map { $0.relocated(from: old, to: new) ?? $0 }
+        controllers.forEach { $0.folderDidMove(from: old, to: new) }
+        reloadProjects()
+        cards.refreshPresence()
+        // Later, so the tabs have reopened their folders by then.
+        scheduleSessionSave()
+        return renamed
+    }
+
     func toggleFavorite(_ url: URL) {
         if isFavorite(url) {
             settings.favorites.removeAll { $0 == url.path }

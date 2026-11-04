@@ -61,6 +61,7 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 ## Milestone 3: File operations and tags (In progress)
 
 - [x] New folder, inline rename, move to Trash, and undo for all three (scripted on temporary fixtures, and refused on a simulated card)
+- [x] Rename and redate a project from the sidebar, with open tabs and favorites following (scripted on temporary fixtures)
 - [ ] Copy, paste, and move
 - [ ] Drag in and between sections
 - [ ] Make dragging to Finder copy files. It currently creates an alias, because dragging out only allows copy and link.

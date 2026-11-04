@@ -163,6 +163,49 @@ private struct Fixture {
 }
 
 @Suite struct ProjectCatalogTests {
+    @Test func renameEditsTheDateAndName() {
+        #expect(ProjectCatalog.name(of: "20261028_example shoot") == "example shoot")
+        #expect(ProjectCatalog.name(of: "20261000_") == "")
+        #expect(ProjectCatalog.name(of: "misc") == "misc")
+        #expect(ProjectCatalog.name(of: "2026102_x") == "2026102_x")
+
+        #expect(ProjectCatalog.folderName(date: "2026-11-03", name: "new") == "20261103_new")
+        #expect(ProjectCatalog.folderName(date: "20261103", name: "new") == "20261103_new")
+        #expect(ProjectCatalog.folderName(date: "2026/11/03", name: "new") == "20261103_new")
+        #expect(ProjectCatalog.folderName(date: "", name: "new") == "new")
+        #expect(ProjectCatalog.folderName(date: "2026-10-00", name: "new") == "20261000_new")
+        #expect(ProjectCatalog.folderName(date: "2028-02-29", name: "new") == "20280229_new")
+    }
+
+    @Test func todayUsesTheLocalDate() throws {
+        // 2026-11-03 20:00 UTC is already the next day in Shanghai.
+        let date = Date(timeIntervalSince1970: 1_793_736_000)
+        #expect(ProjectCatalog.dateString(date, in: try #require(TimeZone(identifier: "UTC"))) == "2026-11-03")
+        #expect(ProjectCatalog.dateString(date, in: try #require(TimeZone(identifier: "Asia/Shanghai"))) == "2026-11-04")
+        #expect(ProjectCatalog.folderName(date: ProjectCatalog.dateString(date), name: "new") != nil)
+    }
+
+    @Test func renameRefusesABadDate() {
+        for date in ["2026", "2026-13-01", "2026-02-30", "2027-02-29", "abcd-ef-gh", "2026-1-3", "٢٠٢٦١١٠٣"] {
+            #expect(ProjectCatalog.folderName(date: date, name: "new") == nil, "\(date)")
+        }
+    }
+
+    @Test func tabsFollowARenamedFolder() {
+        let tab = TabSnapshot(
+            folderPath: "/p/20261028_old",
+            mode: .sections,
+            openPaths: ["/p/20261028_old/3 video": ["/p/20261028_old/3 video/a"], "single": ["/elsewhere/a"]]
+        )
+        let moved = tab.relocated(from: "/p/20261028_old", to: "/p/20261028_new")
+        #expect(moved?.folderPath == "/p/20261028_new")
+        #expect(moved?.openPaths["/p/20261028_new/3 video"] == ["/p/20261028_new/3 video/a"])
+        #expect(moved?.openPaths["single"] == ["/elsewhere/a"])
+        // A folder whose name only starts the same isn't inside it.
+        #expect("/p/20261028_older".relocated(from: "/p/20261028_old", to: "/p/x") == nil)
+        #expect(tab.relocated(from: "/p/20261028_o", to: "/p/x") == nil)
+    }
+
     @Test func listsNewestFirstWithoutTemplates() throws {
         let fixture = try Fixture()
         defer { fixture.remove() }

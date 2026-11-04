@@ -4,12 +4,16 @@ nonisolated enum FileOperationError: LocalizedError, Equatable {
     case cameraCard
     case invalidName
     case nameTaken(String)
+    case importing
+    case invalidDate
 
     var errorDescription: String? {
         switch self {
         case .cameraCard: "ReelDock never changes files on a camera card."
         case .invalidName: "Use a name that isn't empty, doesn't start with a period, and has no slash or colon."
         case let .nameTaken(name): "“\(name)” already exists in this folder."
+        case .importing: "Clips are being imported into this project. Try again when the import finishes."
+        case .invalidDate: "Use a date like 2026-10-28, or leave it empty for no date."
         }
     }
 }

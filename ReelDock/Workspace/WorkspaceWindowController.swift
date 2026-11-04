@@ -321,6 +321,66 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         }
     }
 
+    func promptRenameProject(at url: URL) {
+        guard let window else { return }
+        let folderName = url.lastPathComponent
+        let alert = NSAlert()
+        alert.messageText = "Rename Project"
+        let dateField = NSTextField(string: ProjectCatalog.entry(for: url).displayDate ?? "")
+        dateField.placeholderString = "YYYY-MM-DD"
+        let nameField = NSTextField(string: ProjectCatalog.name(of: folderName))
+        let todayButton = TodayButton(field: dateField)
+        let dateRow = NSStackView(views: [dateField, todayButton])
+        dateRow.spacing = 6
+        dateField.widthAnchor.constraint(equalToConstant: 144).isActive = true
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Date"), dateRow],
+            [NSTextField(labelWithString: "Name"), nameField],
+        ])
+        grid.rowSpacing = 8
+        grid.column(at: 0).xPlacement = .trailing
+        grid.column(at: 1).width = 210
+        grid.rowAlignment = .firstBaseline
+        grid.frame = NSRect(x: 0, y: 0, width: 260, height: 52)
+        alert.accessoryView = grid
+        alert.window.initialFirstResponder = nameField
+        dateField.nextKeyView = todayButton
+        todayButton.nextKeyView = nameField
+        nameField.nextKeyView = dateField
+        alert.addButton(withTitle: "Rename")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            let name = nameField.stringValue.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { return }
+            guard let newName = ProjectCatalog.folderName(date: dateField.stringValue, name: name) else {
+                self?.showFileError("Can't rename “\(folderName)”", FileOperationError.invalidDate)
+                return
+            }
+            self?.renameProject(at: url, toFolderName: newName)
+        }
+    }
+
+    private func renameProject(at url: URL, toFolderName name: String) {
+        do {
+            let renamed = try app.renameProject(at: url, toFolderName: name)
+            guard renamed != url else { return }
+            let oldName = url.lastPathComponent
+            window?.undoManager?.registerUndo(withTarget: self) { target in
+                target.renameProject(at: renamed, toFolderName: oldName)
+            }
+            window?.undoManager?.setActionName("Rename")
+        } catch {
+            showFileError("Can't rename “\(url.lastPathComponent)”", error)
+        }
+    }
+
+    /// Follows a project that was renamed, keeping the same folders open.
+    func folderDidMove(from old: String, to new: String) {
+        guard let snapshot = content.snapshot()?.relocated(from: old, to: new) else { return }
+        show(folder: URL(fileURLWithPath: snapshot.folderPath, isDirectory: true), mode: tab.mode, restoring: snapshot)
+    }
+
     /// Runs off the main thread, because a slow drive can take a while to respond.
     func moveToTrash(_ urls: [URL]) async {
         let (moved, failure) = await Task.detached(priority: .userInitiated) {
@@ -504,6 +564,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         menu.addItem(NSMenuItem.closure("Reveal in Finder") {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         })
+        if app.isProject(url) {
+            menu.addItem(NSMenuItem.closure("Rename…") { [weak self] in
+                self?.promptRenameProject(at: url)
+            })
+        }
         menu.addItem(.separator())
         addTagItems(to: menu, for: [url])
         menu.addItem(.separator())
@@ -712,5 +777,22 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         default:
             return nil
         }
+    }
+}
+
+/// Fills a date field with today. A view of its own, because a button doesn't keep its target alive.
+private final class TodayButton: NSButton {
+    private weak var field: NSTextField?
+
+    convenience init(field: NSTextField) {
+        self.init(title: "Today", target: nil, action: nil)
+        self.field = field
+        target = self
+        action = #selector(fillToday)
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+
+    @objc private func fillToday() {
+        field?.stringValue = ProjectCatalog.dateString(.now)
     }
 }

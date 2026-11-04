@@ -193,6 +193,45 @@ final class DebugDriver {
             return "controllers=\(app.controllers.count)"
         case "closetab":
             controller.window?.close()
+        case "renameprompt":
+            // Opens the sheet for a project, as the sidebar's menu item does.
+            guard let project = app.projects.first(where: { $0.title == parts[1] }) else { return "not found" }
+            let menu = controller.folderContextMenu(for: project.url)
+            guard let index = menu.items.firstIndex(where: { $0.title == "Rename…" }) else { return "no menu item" }
+            menu.performActionForItem(at: index)
+        case "renamesheet":
+            // renamesheet|name|date: fills in the open sheet and presses Rename. renamesheet alone reports it.
+            guard let sheet = controller.window?.attachedSheet,
+                  let fields = sheet.contentView?.debugTextFields.filter(\.isEditable),
+                  let date = fields.first(where: { $0.placeholderString == "YYYY-MM-DD" }),
+                  let name = fields.first(where: { $0 !== date }),
+                  let button = sheet.contentView?.debugButtons.first(where: { $0.title == "Rename" }) else { return "no sheet" }
+            guard parts.count > 1 else { return "date=\(date.stringValue) name=\(name.stringValue) nameFirst=\(sheet.initialFirstResponder === name)" }
+            name.stringValue = parts[1]
+            if parts.count > 2 { date.stringValue = parts[2] }
+            button.performClick(nil)
+        case "renametoday":
+            // Presses Today in the open sheet, and reports where the date row's views landed.
+            guard let sheet = controller.window?.attachedSheet, let view = sheet.contentView,
+                  let button = view.debugButtons.first(where: { $0.title == "Today" }),
+                  let date = view.debugTextFields.first(where: { $0.placeholderString == "YYYY-MM-DD" }),
+                  let name = view.debugTextFields.first(where: { $0.isEditable && $0.placeholderString == nil }) else { return "no button" }
+            view.layoutSubtreeIfNeeded()
+            let frames = "date=\(date.convert(date.bounds, to: view)) today=\(button.convert(button.bounds, to: view)) name=\(name.convert(name.bounds, to: view)) sheet=\(view.bounds.size)"
+            button.performClick(nil)
+            return "value=\(date.stringValue) \(frames)"
+        case "snapsheet":
+            guard let view = controller.window?.attachedSheet?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return "no sheet" }
+            view.cacheDisplay(in: view.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+        case "renamestate":
+            let sheet = controller.window?.attachedSheet
+            return "sheet=\(sheet?.contentView?.debugTextFields.map(\.stringValue) ?? []) projects=\(app.projects.map(\.folderName)) tabs=\(app.controllers.map { $0.tab.folder?.lastPathComponent ?? "blank" }) favorites=\(app.settings.favorites.map { ($0 as NSString).lastPathComponent }) title=\(controller.window?.title ?? "")"
+        case "dismisssheet":
+            guard let sheet = controller.window?.attachedSheet else { return "no sheet" }
+            controller.window?.endSheet(sheet)
+        case "openstate":
+            return (content.debugSectionsHost?.stack.panes ?? []).filter { !$0.browser.openPath.isEmpty }.map { "\($0.section.id.split(separator: "/").suffix(2).joined(separator: "/")) -> \($0.browser.openPath.map { $0.split(separator: "/").suffix(2).joined(separator: "/") })" }.joined(separator: "; ")
         case "stallstart":
             debugStallWatch.start()
         case "stallreport":
@@ -586,5 +625,14 @@ final class DebugStallWatch {
         timer = nil
         return "longestMainThreadGap=\(longest)"
     }
+}
+
+private extension NSView {
+    func debugAll<T: NSView>(_ type: T.Type) -> [T] {
+        subviews.flatMap { ($0 as? T).map { [$0] } ?? $0.debugAll(type) }
+    }
+
+    var debugTextFields: [NSTextField] { debugAll(NSTextField.self) }
+    var debugButtons: [NSButton] { debugAll(NSButton.self) }
 }
 #endif
