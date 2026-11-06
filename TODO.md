@@ -90,6 +90,14 @@ Not exercised: the prompt for an unknown camera, the prompt when a project has n
 
 Done when: tags set in ReelDock appear in Finder and tags set in Finder appear in ReelDock, tested on temporary fixtures.
 
+## Milestone 4: Reviewing and archiving (In progress: awaiting hands-on acceptance)
+
+- [x] Sort files by name, shooting date, size, or kind, remembered by section (unit tested; order scripted on temporary fixtures and clones of real clips; the sort button's popup and View menu not exercised)
+- [x] Grid view for sections, with `cover`, `picture`, and `photo` starting as grids (keys, selection, opening folders, rename, undo, and remembering scripted on temporary fixtures, tiles checked in a snapshot; real mouse clicks, drags, rubber-band selection, and how tiles look on screen not exercised)
+- [x] Preview LUTs for S-Log3, Apple Log, and Apple Log 2, on clips that record the curve (unit tested. Output compared with ffmpeg through the same LUT on clones of a real Sony clip and a real phone clip: mean difference 0.73 and 0.63 of 255. A 4K60 Sony clip played at about 63 frames a second forward and 60.4 backward with its LUT, and ran at 4× both ways, on this Mac. Playback had looked darker than the paused picture: measured by capturing the app's window, now within 1 level, and confirmed on screen by Raycal. The menu's file chooser not exercised)
+- [x] Import Blackmagic Camera clips from Downloads like a card (unit tested. Scripted on clones of real clips in a stand-in folder: detection, arrival opening the panel, archive folder per camera, attributes kept, dates kept, a taken name, Move Imported to Trash with undo; a real AirDrop, the real Downloads folder and its permission prompt, and a clip disappearing mid-import not exercised)
+- [x] Archive a project to another drive (scripted on a temporary APFS volume: the prompt, same drive refused, missing drive, pause, import refused during the move, verified copy, status of its clips, tab returning to the list, and undo; a real external drive, a large project, and pulling the drive mid-copy not exercised)
+
 ## Distribution (In progress)
 
 - [x] Check for and install updates with Sparkle (scripted from 0.0.9 to the published 0.1.0 through the real feed, the update dialog not exercised)
@@ -101,8 +109,6 @@ Done when: tags set in ReelDock appear in Finder and tags set in Finder appear i
 - TASCAM DR-05XP audio import
 - FX3 photo import
 - Importing FX3 proxies from `M4ROOT/SUB`
-- Applying a LUT to S-Log3 previews
 - Tagging clips during import
 - Search across all projects
-- Grid view for picture and cover sections
 - Showing project size and storage use

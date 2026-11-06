@@ -4,9 +4,9 @@ A native macOS workspace for video projects: open a project and see every folder
 
 一个原生 macOS 视频项目工作台：打开项目就能看到所有文件夹，拷卡也不用再在 Finder 里一层层翻。
 
-**Status: browsing, card import, inline playback, basic file operations, and Finder tags are implemented and awaiting hands-on acceptance.** The list below describes the intended first version. See [docs/SPEC.md](docs/SPEC.md) for behavior, [TODO.md](TODO.md) for milestones, and [DECISIONS.md](DECISIONS.md) for the reasoning behind lasting choices.
+**Status: browsing, card and Downloads import, inline playback with preview LUTs, basic file operations, Finder tags, and project archiving are implemented and awaiting hands-on acceptance.** The list below describes the intended first version. See [docs/SPEC.md](docs/SPEC.md) for behavior, [TODO.md](TODO.md) for milestones, and [DECISIONS.md](DECISIONS.md) for the reasoning behind lasting choices.
 
-**状态：浏览、拷卡、内置播放、基础文件操作和 Finder 标签都已实现，等待实际使用验收。** 下面的列表描述的是计划中的第一版。具体行为见 [docs/SPEC.md](docs/SPEC.md)，里程碑见 [TODO.md](TODO.md)，长期决策的理由见 [DECISIONS.md](DECISIONS.md)，这些文档都是英文。
+**状态：浏览、拷卡和“下载”文件夹导入、内置播放和预览 LUT、基础文件操作、Finder 标签以及项目归档都已实现，等待实际使用验收。** 下面的列表描述的是计划中的第一版。具体行为见 [docs/SPEC.md](docs/SPEC.md)，里程碑见 [TODO.md](TODO.md)，长期决策的理由见 [DECISIONS.md](DECISIONS.md)，这些文档都是英文。
 
 ## Why / 为什么做
 
@@ -46,6 +46,9 @@ Finder 在两件事上很慢：
 - Trim MP4 and MOV clips with in and out points, and rotate them instantly, without re-encoding.<br>用入点和出点剪辑 MP4 和 MOV 片段，也能即时旋转，都不用重新编码。
 - Rotate and crop JPEG, PNG, HEIC, and TIFF images. Saving keeps the original in the Trash, or writes a copy beside it.<br>旋转和裁剪 JPEG、PNG、HEIC、TIFF 图片。保存时原文件进废纸篓，也可以在旁边另存一份。
 - Create a Traditional Chinese version of an SRT subtitle from its context menu.<br>在 SRT 字幕的右键菜单里一键创建繁体中文版本。
+- Sort any section by name, shooting date, size, or kind, and show it as a list or a grid of pictures. Each choice is remembered by section name.<br>每个分区都能按名称、拍摄日期、大小或类型排序，也能在列表和图片网格之间切换，选择按分区名记住。
+- Preview S-Log3, Apple Log, and Apple Log 2 footage through a `.cube` LUT, on clips that record that curve. It changes the preview only, never a file.<br>用 `.cube` LUT 预览 S-Log3、Apple Log 和 Apple Log 2 素材，只作用于记录了对应曲线的片段，只影响预览，绝不改动文件。
+- Archive a finished project to an external drive with every file verified. The original goes to the Trash, and undo brings it back.<br>把做完的项目归档到外置盘，每个文件都会校验。原项目进废纸篓，可以撤销恢复。
 
 **Card import / 拷卡**
 
@@ -54,13 +57,14 @@ Finder 在两件事上很慢：
 - Import everything or a selection into the open project.<br>把全部或选中的片段导入当前打开的项目。
 - Show which clips were already imported and where, across all projects and the personal archive.<br>显示哪些片段已经导入过、导入到了哪里，范围包括所有项目和个人归档。
 - Send remaining clips to the personal archive, sorted automatically into `media/YYYYMM/video/FX3` by shooting date.<br>把剩下的片段送到个人归档，按拍摄日期自动放进 `media/YYYYMM/video/FX3`。
+- Import Blackmagic Camera clips that AirDrop left in Downloads the same way, sorted into each phone's own archive folder.<br>AirDrop 到“下载”文件夹的 Blackmagic Camera 片段也能用同样的方式导入，并自动放进各自手机的归档文件夹。
 - Copy in the background, verify every file, never overwrite anything, and never write to the card.<br>在后台拷贝并校验每个文件，绝不覆盖任何文件，也绝不写入存储卡。
 
 ## Not in v1 / v1 不包含
 
 - Importing from DJI Action, TASCAM recorders, or FX3 photos. The import code is split by device so these can be added later.<br>从 DJI Action、TASCAM 录音机导入，或导入 FX3 照片。导入代码按设备拆分，以后可以加上。
 - Deleting clips from cards. Format cards in the camera.<br>删除卡里的片段。请在相机里格式化存储卡。
-- Applying LUTs to previews, generating proxies, or integrating with DaVinci Resolve beyond dragging files into it.<br>给预览套 LUT、生成代理，以及除拖入文件之外的 DaVinci Resolve 集成。
+- Baking LUTs into exports, generating proxies, or integrating with DaVinci Resolve beyond dragging files into it.<br>把 LUT 烧录进导出文件、生成代理，以及除拖入文件之外的 DaVinci Resolve 集成。
 
 ## Install / 安装
 

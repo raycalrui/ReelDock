@@ -82,7 +82,15 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         case .sections:
             loadSections(folder: folder, restoring: snapshot)
         case .single:
-            let browser = ColumnBrowserView(rootURL: folder, identifier: "single", filesOnly: false, host: self)
+            let preference = app.settings.sections[SectionBuilder.singleBrowserKey]
+            let browser = ColumnBrowserView(
+                rootURL: folder,
+                identifier: "single",
+                filesOnly: false,
+                host: self,
+                sort: preference?.sort ?? .standard,
+                isGrid: preference?.isGrid ?? false
+            )
             singleBrowser = browser
             install(browser)
             activeBrowser = browser
@@ -184,8 +192,19 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
     }
 
     private func makePane(_ section: FolderSection, hasNumbered: Bool) -> SectionPaneView {
-        let pane = SectionPaneView(section: section, host: self)
         let preference = app.settings.sections[section.preferenceKey]
+        let pane = SectionPaneView(
+            section: section,
+            host: self,
+            sort: preference?.sort ?? .standard,
+            isGrid: preference?.isGrid ?? section.startsAsGrid
+        )
+        pane.header.isGrid = pane.browser.isGrid
+        pane.header.onToggleGrid = { [weak pane] in
+            guard let pane else { return }
+            pane.browser.setGrid(!pane.browser.isGrid)
+        }
+        pane.header.makeSortMenu = { [weak pane] in pane?.browser.sortMenu() }
         pane.isExpanded = preference?.collapsed.map { !$0 } ?? section.startsExpanded(amongNumberedSections: hasNumbered)
         pane.weight = preference?.heightWeight.map { CGFloat($0) } ?? pane.defaultWeight
 
@@ -202,8 +221,11 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         }
         // Always in view, so it works when the list is full. It's also the way into a section that's empty, since an empty section doesn't open.
         pane.header.makeMenu = { [weak self, weak pane] in
-            guard let self, !FileOperations.isOnCameraCard(section.url) else { return nil }
+            guard let self, let pane else { return nil }
             let menu = NSMenu()
+            pane.browser.addViewOptionItems(to: menu)
+            guard !FileOperations.isOnCameraCard(section.url) else { return menu }
+            menu.addItem(.separator())
             if !section.isFilesOnly {
                 menu.addItem(.closure("New Folder") { [weak self, weak pane] in
                     guard let pane else { return }
@@ -219,7 +241,7 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
                 menu.addItem(.closure("Paste") { [weak self] in self?.transferPastedFiles(.copy, into: section.url) })
                 menu.addItem(.closure("Move Here") { [weak self] in self?.transferPastedFiles(.move, into: section.url) })
             }
-            return menu.items.isEmpty ? nil : menu
+            return menu
         }
         pane.header.dropOperation = { [weak self] info in
             self?.dropOperation(info, into: section.url) ?? []
@@ -298,6 +320,11 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
     /// Only one side stays selected, so the browser doesn't look selected while a clip is previewed.
     func clearBrowserSelection() {
         activeBrowser?.clearLeafSelection()
+    }
+
+    /// The browser the View menu's sort and grid choices apply to.
+    var viewOptionsBrowser: ColumnBrowserView? {
+        activeBrowser ?? sectionsHost?.stack.panes.first { $0.isExpanded && $0.count != 0 }?.browser
     }
 
     /// Nil while a card clip is selected, because nothing on a card can be changed.
@@ -400,6 +427,19 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
 
     func browserDidChangePath(_ browser: ColumnBrowserView) {
         app.scheduleSessionSave()
+    }
+
+    func browserDidChangeViewOptions(_ browser: ColumnBrowserView) {
+        let pane = sectionsHost?.stack.panes.first { $0.browser === browser }
+        pane?.header.isGrid = browser.isGrid
+        // A grid takes more height than a list.
+        sectionsHost?.needsLayout = true
+        sectionsHost?.stack.needsLayout = true
+        let key = pane?.section.preferenceKey ?? SectionBuilder.singleBrowserKey
+        app.updateSectionPreference(key) {
+            $0.sort = browser.sort
+            $0.isGrid = browser.isGrid
+        }
     }
 
     func browser(_ browser: ColumnBrowserView, didLoadRootWithCount count: Int) {

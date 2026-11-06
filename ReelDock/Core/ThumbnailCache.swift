@@ -61,6 +61,23 @@ final class ThumbnailCache {
         return result
     }
 
+    /// A video's first frame through a LUT, which is what the player shows once it opens.
+    func gradedFirstFrame(of url: URL, modified: Date?, size: CGFloat, scale: CGFloat, grade: PreviewGrade) async -> NSImage? {
+        let cacheKey = "graded|\(ObjectIdentifier(grade))|" + key(url, modified, size)
+        if let image = images.object(forKey: cacheKey as NSString) { return image }
+        let asset = AVURLAsset(url: url)
+        guard let composition = await grade.composition(for: asset) else { return nil }
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.videoComposition = composition
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+        generator.maximumSize = CGSize(width: size * scale, height: size * scale)
+        guard let cgImage = try? await generator.image(at: .zero).image else { return nil }
+        let result = NSImage(cgImage: cgImage, size: .zero)
+        images.setObject(result, forKey: cacheKey as NSString)
+        return result
+    }
+
     func cancel(_ request: QLThumbnailGenerator.Request) {
         QLThumbnailGenerator.shared.cancel(request)
     }

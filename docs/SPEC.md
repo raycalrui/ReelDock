@@ -36,6 +36,9 @@ Status: draft for review. Milestone 1 is implemented and awaiting hands-on accep
 - **The inspector stays open.** Selecting or deselecting never shows or hides it. The toolbar button hides it for that tab, until the button, Space, or an image edit brings it back.
 - **With nothing selected,** the inspector shows the open folder: a project's thumbnail, its total size and file count, how many are videos, pictures, and audio, each top-level folder's count and size, and its dates. On the new-tab page it shows the same totals for the projects folder. The numbers recount after changes settle, and a count of a very large folder stops when something else is shown.
 - **A section's columns scroll sideways** with a two-finger swipe or Shift and a mouse wheel, even with the pointer over a column.
+- **Sorting:** each browser sorts by name, shooting date, size, or kind, ascending or descending, from the header's sort button, a section header's or empty column's context menu, or **View > Sort By**. Name starts A to Z, shooting date oldest first, size largest first, and kind A to Z. Folders stay on top by name, and a file with no value goes last in either direction. The choice is remembered by section name, and single browsers share one choice.
+- **Shooting date** is what the file itself records: the Blackmagic Camera attribute, then a video's header, then a photo's EXIF, and last the file's creation date. Those are read in the background only for a browser sorted by date, and kept in memory.
+- **Grid:** the header's grid button, its context menu, or **View > Show as Grid** (`⌘3`) shows a browser's columns as tiles with a picture, tag dots, name, and size. `cover`, `picture`, and `photo` sections start as grids, and the choice is remembered by section name. A grid section keeps room for a whole row of tiles. Selection, drag and drop, context menus, rename, and file commands work as in a list. Arrow keys move between tiles, Left from a row's first tile goes to the column before, and Right from a folder goes into it.
 
 ## 2. Folders and sections
 
@@ -80,7 +83,7 @@ Contents load only when they are shown. Real projects can contain Python environ
 
 Listed in this order, because the project list is the longest:
 
-- **Cards:** mounted cards, with a count of clips not yet imported. Arrives with milestone 2.
+- **Import:** mounted cards and the Downloads folder when it holds camera clips, with a count of clips not yet imported.
 - **Favorites:** any folder or project, added by button or drag, and reorderable.
 - **Projects:** the chosen root's list, with a filter field.
 
@@ -99,6 +102,7 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | `K` | Pause |
 | Hold `K`, tap `L` or `J` | Step one frame forward or back |
 | `F` or `P`, or the full-screen button | Full screen for videos and photos. `F`, `P`, or `Esc` exits. |
+| `G`, or the LUT button | Show log footage with its LUT, or as shot. Also **View > Preview with LUT** (`⇧⌘L`). |
 
 - The keys work with focus in the browser, the card list, or the inspector. They type normally while a name is being edited, and `J`, `K`, and `L` stay available for type-select when the selection can't be played.
 - Audio files show a waveform in place of the picture, read in the background when selected, stopped on moving on, and kept in memory. Any format the system can decode works, and a file it can't read shows its icon.
@@ -107,6 +111,9 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 - The preview follows the file's shape, so vertical footage and photos can use most of the panel's height.
 - Backward playback at 1× and 2× shows every frame the display can, decoded at up to 1920 pixels on the long side and silent. At 4× and 8× it uses `AVPlayer`, which is already smooth there. Pausing returns to the same frame at full resolution.
 - Full screen opens and closes with no animation, covers the menu bar and Dock on that screen, and stays in the current Space. With more than one display, its controls offer the others. The choice is remembered, and falls back to the window's display when that one isn't connected. Playback keys keep working, Up and Down move through the list behind it, and controls hide after a moment without mouse movement, unless the pointer is on them or the clip has trim marks. Moving to something that can't be shown closes it.
+- **Preview LUTs:** Settings holds one `.cube` file each for S-Log3, Apple Log, and Apple Log 2, and the choice to use them. A LUT only goes on a clip that records that curve: Apple Log and Apple Log 2 are in the video track's own tag, which is the only place they differ, Sony MP4s write theirs in the metadata at the end of the file, and Blackmagic Camera's attribute is the fallback, so finished videos, Rec. 709 footage, and files with no record stay as they are. The transport bar's button shows only on those clips and lights up while its LUT is showing. Turning it on with no LUT for the selected clip's curve asks for a file, starting in Resolve's `LUT/Sony` folder for S-Log3.
+- LUTs change previews only, in the player, its poster, the frame grid, full screen, and backward playback. Nothing is written to a file, and no export uses them. List and grid thumbnails, project thumbnails, and clip thumbnails in the import panel still show the source as shot.
+- The LUT sees the file's raw values with color management off, as in Resolve, using the range and matrix the file declares, and a Rec. 709 matrix when it declares none. Output is tagged Rec. 709. macOS shows a video layer tagged that way darker than a picture with the same tag, so frames for the player and backward playback are adjusted to match the poster and frame grid, which Raycal confirmed match Resolve. LUTs up to 64 points are used as they are, and larger ones or ones with a shaper or custom domain are sampled to 64.
 - Below a landscape video's details, a grid of evenly spaced frames fills the remaining height, showing only whole rows. Clicking a frame jumps there, and the frame nearest the playhead is outlined.
 
 ## 5. File operations
@@ -130,6 +137,7 @@ Clips play in the inspector, not in a separate window, so the project stays in v
 | Taken names | Nothing is replaced. A paste becomes `clip copy.mp4`, then `clip copy 2.mp4`. A move becomes `clip 2.mp4`. The activity popover shows the name used. |
 | Progress | Pastes and moves run in the background one at a time, in the same toolbar popover as imports, with pause and cancel. A failure shows an alert, and quitting asks first. Cancelling or a failure leaves no partial item. |
 | Busy folders | A folder can't be renamed, moved, or trashed while files are being imported or copied into it, or copied or moved out of it. An alert says why. Other files beside it are unaffected. |
+| Archive a project | **Archive to External Drive…** in the sidebar's context menu moves the project into the folder chosen as **Project Archive** in Settings, which must be on another drive. It asks first, showing the project's size and the drive's free space. It uses the same queue as a move: every file is copied and verified, the project appears on the drive once all of it is there, and the original then goes to the Trash, so the space comes back when the Trash is emptied. A taken name gets a number. Tabs showing the project go back to the project list, favorites follow it, and `⌘Z` puts it back and sends the copy to that drive's Trash. Nothing can be imported or pasted into a project while it moves. Clips in archived projects count as imported while the drive is connected, and show as "Imported, now missing" when it isn't. |
 | Move a project to the Trash | **Move to Trash…** in the sidebar's context menu asks first. Tabs showing it go blank and it leaves Favorites. `⌘Z` puts it back and restores both. |
 | Delete | `⌘⌫` moves to Trash, with no permanent delete, and plays Finder's Trash sound, which follows the system's setting for user interface sound effects. The next file is then selected. |
 | Undo | `⌘Z` undoes a new folder, a rename, a move to Trash, a paste, or a move. Undoing a paste sends the copies to the Trash. Undoing a move across volumes puts the originals back and sends the copies to the Trash, and can't be redone. Putting a file back never replaces one created since. |
@@ -274,6 +282,18 @@ The transfer rate is limited by the card and reader, so ReelDock cannot exceed t
 
 Measured on a freshly mounted 1.2 GB simulated card on the internal SSD: `cp` took about 1.2 s and ReelDock about 2.1 s, so verification costs about 0.7 s per GB. `cp` doesn't wait for its writes to reach the disk, so this slightly overstates the difference. A comparison on a real card with multi-GB clips is still to be done.
 
+### Clips in Downloads
+
+Clips shot with the Blackmagic Camera app usually arrive by AirDrop in `~/Downloads`, so that folder works like a card:
+
+- A clip is recognized by the `com.blackmagicdesign.fileinfo` attribute the app writes, which survives AirDrop. All 420 such clips in real projects and archives have it. Other videos in Downloads are never listed, and subfolders aren't read.
+- The folder appears under **Import** in the sidebar with its count of new clips, once it holds at least one clip, and the import panel works the same: groups, thumbnails from the app's own attribute, preview, status, and destinations.
+- The panel opens when a new clip arrives while the app is running. Clips already there at launch don't open it, since they may never be imported.
+- The shooting date, camera, lens, format, and duration come from the attribute, and the curve from the clip's track tag. **Import to Archive** sends each clip to the folder its own camera names, like `media/202610/video/iPhone 18 Pro`, so one import can span several phones.
+- A copy keeps the app's attributes, so its details and LUT still work later, but not AirDrop's quarantine flag.
+- Clips stay in Downloads after an import. In place of Eject, **Move Imported to Trash** asks first and sends the clips that have a copy on disk, checked at that moment, to the Trash, and `⌘Z` puts them back. A clip that's only on record as imported stays.
+- One clip disappearing during an import fails that clip alone, and the rest carry on.
+
 ## 8. New project
 
 - **New Project…** is in the File menu (`⌥⌘N`), beside the sidebar's filter field, and on the new-tab page. It asks for a date and a name, with today's date as an editable default.
@@ -297,11 +317,11 @@ The ledger is append-only plain text, so it can be inspected and backed up easil
 
 ## 10. Settings
 
-**Settings…** (`⌘,`) shows the projects folder and personal archive, each with **Choose…**, and the archive with **Clear**. It also has **Show hidden files**, and **Reset** for the section layout, which returns heights and collapsed sections to their defaults in open tabs too.
+**Settings…** (`⌘,`) shows the projects folder, personal archive, and project archive, each with **Choose…**, and both archives with **Clear**. It has the preview LUT choices, **Show hidden files**, and **Reset** for the section layout, which returns heights and collapsed sections to their defaults in open tabs too, and leaves each section's sort and grid choice alone.
 
 ## 11. System access
 
-- macOS will ask for access to the Desktop folder and to removable volumes, because projects live under `~/Desktop/video`.
+- macOS will ask for access to the Desktop folder and to removable volumes, because projects live under `~/Desktop/video`, and to the Downloads folder, for clips that arrive there.
 - Builds need a stable code signature, or macOS asks again after each rebuild. A valid signing identity already exists on this Mac.
 
 ## 12. Updates

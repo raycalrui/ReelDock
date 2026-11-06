@@ -257,7 +257,10 @@ final class ImportQueue {
         for attempt in 1...2 {
             do {
                 control.beginClip()
-                let output = try ClipCopier.copy(source: job.clip.url, toFolder: folder, control: control, hooks: hooks)
+                // What a phone clip's camera recorded stays with it. A card's clips have none of these.
+                let output = try ClipCopier.copy(source: job.clip.url, toFolder: folder, control: control, hooks: hooks) {
+                    $0.hasPrefix(BlackmagicClipInfo.attributePrefix)
+                }
                 // The clip is already safe at this point, so a ledger failure doesn't fail the import.
                 // The folder scan still recognizes it next time.
                 try? ledger.append(LedgerEntry(
@@ -280,7 +283,10 @@ final class ImportQueue {
                 case .sourceSizeChanged:
                     return .failed(reason: "The clip changed size while copying")
                 case let .sourceRead(code):
-                    if !FileManager.default.fileExists(atPath: job.clip.url.path) { return .cardRemoved }
+                    if !FileManager.default.fileExists(atPath: job.clip.url.path) {
+                        // A card takes the rest of its clips with it, and one file gone from a folder doesn't.
+                        return FileManager.default.fileExists(atPath: job.cardID) ? .failed(reason: "The clip is no longer there") : .cardRemoved
+                    }
                     return .failed(reason: "Can't read the clip: \(String(cString: strerror(code)))")
                 case let .destinationWrite(code):
                     return .stopQueue(reason: "Can't write to the destination: \(String(cString: strerror(code)))")

@@ -210,7 +210,12 @@ final class ColumnResizeHandle: NSView {
     }
 }
 
-final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate {
+/// A row or tile whose name is being typed.
+protocol NameEditing: AnyObject {
+    func endEditingName()
+}
+
+final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegate, NSTextFieldDelegate, NSCollectionViewDataSource, NSCollectionViewDelegate {
     enum Filter {
         case all
         case filesOnly
@@ -225,7 +230,10 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     weak var browser: ColumnBrowserView? {
         didSet { scrollView.browser = browser }
     }
-    var preferredWidth: CGFloat = 280
+    private static let listWidth: CGFloat = 280
+    /// Two tiles, so a grid with a folder open beside it doesn't fold into one long column.
+    private static let gridWidth: CGFloat = 322
+    var preferredWidth: CGFloat = listWidth
 
     private(set) var items: [FolderItem] = []
     private var hasLoaded = false
@@ -234,8 +242,12 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     private(set) var isApplyingSelection = false
 
     let tableView = BrowserTableView()
+    /// Set while this column shows a grid. The table then stays out of the window.
+    private(set) var grid: BrowserGridView?
+    private var gridSelectionPending = false
     private let scrollView = ColumnScrollView()
     private var renamingURL: URL?
+    private weak var renamingCell: (any NameEditing)?
     private var needsReloadAfterRename = false
     private let handle = ColumnResizeHandle()
     private let statusLabel = NSTextField(labelWithString: "")
@@ -299,6 +311,48 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    /// What takes keyboard focus in this column.
+    var focusView: NSView { grid ?? tableView }
+
+    /// Swaps the list and the grid, keeping the selection.
+    func setGrid(_ isGrid: Bool) {
+        guard isGrid != (grid != nil) else { return }
+        let rows = selectedRows
+        let hadFocus = window?.firstResponder === focusView
+        if isGrid {
+            let view = BrowserGridView()
+            view.column = self
+            view.dataSource = self
+            view.delegate = self
+            view.setDraggingSourceOperationMask(.copy, forLocal: false)
+            view.setDraggingSourceOperationMask(FileOperations.isOnCameraCard(folderURL) ? .copy : [.copy, .move, .generic], forLocal: true)
+            view.autoresizingMask = [.width]
+            grid = view
+            scrollView.documentView = view
+            if preferredWidth == Self.listWidth { preferredWidth = Self.gridWidth }
+        } else {
+            grid = nil
+            scrollView.documentView = tableView
+            if preferredWidth == Self.gridWidth { preferredWidth = Self.listWidth }
+        }
+        browser?.needsLayout = true
+        reloadRows()
+        selectRows(rows, quietly: true)
+        if hadFocus { window?.makeFirstResponder(focusView) }
+    }
+
+    /// A reload can shrink the table's selection, and whoever calls this reports any change itself.
+    private func reloadRows() {
+        if let grid {
+            grid.reloadData()
+        } else {
+            let wasApplying = isApplyingSelection
+            isApplyingSelection = true
+            tableView.reloadData()
+            isApplyingSelection = wasApplying
+        }
+    }
+
     var showsResizeHandle = true {
         didSet { handle.isHidden = !showsResizeHandle }
     }
@@ -328,10 +382,15 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         let url = folderURL
         let showHidden = browser?.showHidden ?? false
         let filesOnly = filter == .filesOnly
-        let result = await Task.detached(priority: .userInitiated) { () -> Result<[FolderItem], any Error> in
-            Result {
-                let items = try FolderReader.read(url, showHidden: showHidden)
-                return filesOnly ? items.filter { !$0.isFolder } : items
+        let sort = browser?.sort ?? .standard
+        let result = await Task.detached(priority: .userInitiated) { () async -> Result<[FolderItem], any Error> in
+            do {
+                let read = try FolderReader.read(url, showHidden: showHidden)
+                let items = filesOnly ? read.filter { !$0.isFolder } : read
+                let dates = sort.key == .date ? await ShootingDate.dates(for: items) : [:]
+                return .success(sort.sorted(items, dates: dates))
+            } catch {
+                return .failure(error)
             }
         }.value
         guard generation == loadGeneration else { return }
@@ -362,49 +421,67 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         let selectedIDs = Set(selectedItems.map(\.id))
         let selectionWasEmpty = selectedIDs.isEmpty
         items = newItems
-        isApplyingSelection = true
-        tableView.reloadData()
-        let rows = IndexSet(items.indices.filter { selectedIDs.contains(items[$0].id) })
-        tableView.selectRowIndexes(rows, byExtendingSelection: false)
-        isApplyingSelection = false
+        reloadRows()
+        selectRows(IndexSet(items.indices.filter { selectedIDs.contains(items[$0].id) }), quietly: true)
         browser?.columnDidReload(self, selectionChanged: !selectionWasEmpty)
     }
 
     // MARK: Selection
 
+    var selectedRows: IndexSet {
+        grid.map { IndexSet($0.selectionIndexPaths.map(\.item)) } ?? tableView.selectedRowIndexes
+    }
+
     var selectedItems: [FolderItem] {
-        tableView.selectedRowIndexes.compactMap { $0 < items.count ? items[$0] : nil }
+        selectedRows.compactMap { $0 < items.count ? items[$0] : nil }
+    }
+
+    /// `quietly` keeps the browser and the inspector from hearing about it.
+    func selectRows(_ rows: IndexSet, quietly: Bool = false) {
+        if let grid {
+            grid.selectionIndexPaths = Set(rows.map { IndexPath(item: $0, section: 0) })
+            if !quietly { browser?.columnSelectionDidChange(self) }
+        } else {
+            let wasApplying = isApplyingSelection
+            isApplyingSelection = quietly || wasApplying
+            tableView.selectRowIndexes(rows, byExtendingSelection: false)
+            isApplyingSelection = wasApplying
+        }
+    }
+
+    private func scrollToRow(_ row: Int) {
+        if let grid {
+            grid.scrollToItems(at: [IndexPath(item: row, section: 0)], scrollPosition: .nearestHorizontalEdge)
+        } else {
+            tableView.scrollRowToVisible(row)
+        }
     }
 
     func selectSilently(path: String) -> FolderItem? {
         guard let row = items.firstIndex(where: { $0.url.path == path }) else { return nil }
-        isApplyingSelection = true
-        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        tableView.scrollRowToVisible(row)
-        isApplyingSelection = false
+        selectRows(IndexSet(integer: row), quietly: true)
+        scrollToRow(row)
         return items[row]
     }
 
     func clearSelectionSilently() {
-        isApplyingSelection = true
-        tableView.deselectAll(nil)
-        isApplyingSelection = false
+        selectRows(IndexSet(), quietly: true)
     }
 
     func select(url: URL) {
         guard let row = items.firstIndex(where: { $0.url.path == url.path }) else { return }
-        tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
-        tableView.scrollRowToVisible(row)
+        selectRows(IndexSet(integer: row))
+        scrollToRow(row)
     }
 
     /// Keeps culling moving after a delete. A folder isn't selected, since that would open it.
     func selectFileAfterRemoval(near row: Int) {
-        guard !items.isEmpty, tableView.selectedRowIndexes.isEmpty else { return }
+        guard !items.isEmpty, selectedRows.isEmpty else { return }
         let next = min(row, items.count - 1)
-        window?.makeFirstResponder(tableView)
+        window?.makeFirstResponder(focusView)
         guard !items[next].isFolder else { return }
-        tableView.selectRowIndexes(IndexSet(integer: next), byExtendingSelection: false)
-        tableView.scrollRowToVisible(next)
+        selectRows(IndexSet(integer: next))
+        scrollToRow(next)
     }
 
     // MARK: Rename
@@ -413,10 +490,18 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     func beginRename(of url: URL) {
         guard renamingURL == nil, let row = items.firstIndex(where: { $0.url.path == url.path }) else { return }
         _ = selectSilently(path: url.path)
-        tableView.scrollRowToVisible(row)
+        if let grid {
+            grid.layoutSubtreeIfNeeded()
+            guard let item = grid.item(at: IndexPath(item: row, section: 0)) as? GridTileItem, let tile = item.view as? GridTileView else { return }
+            renamingURL = url
+            renamingCell = tile
+            item.beginEditingName(delegate: self, isFolder: items[row].isFolder)
+            return
+        }
         tableView.layoutSubtreeIfNeeded()
         guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: true) as? FileRowView else { return }
         renamingURL = url
+        renamingCell = cell
         cell.beginEditingName(delegate: self, isFolder: items[row].isFolder)
     }
 
@@ -425,7 +510,7 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         finishRename(url: url, field: field, newName: field.stringValue)
         let movement = notification.userInfo?["NSTextMovement"] as? Int
         if movement == NSTextMovement.return.rawValue {
-            window?.makeFirstResponder(tableView)
+            window?.makeFirstResponder(focusView)
         }
     }
 
@@ -433,13 +518,14 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         guard selector == #selector(NSResponder.cancelOperation(_:)), let url = renamingURL, let field = control as? NSTextField else { return false }
         field.abortEditing()
         finishRename(url: url, field: field, newName: nil)
-        window?.makeFirstResponder(tableView)
+        window?.makeFirstResponder(focusView)
         return true
     }
 
     private func finishRename(url: URL, field: NSTextField, newName: String?) {
         renamingURL = nil
-        (field.superview?.superview as? FileRowView)?.endEditingName()
+        renamingCell?.endEditingName()
+        renamingCell = nil
         var result = url
         if let newName, newName != url.lastPathComponent {
             result = browser?.host?.renameItem(at: url, to: newName) ?? url
@@ -449,9 +535,8 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
             browser?.renameDidFinish(in: self, newURL: result)
         } else if let row = items.firstIndex(where: { $0.url.path == url.path }) {
             // Selecting for real opens a new folder's column, which editing its name held back.
-            isApplyingSelection = false
-            tableView.selectRowIndexes(IndexSet(), byExtendingSelection: false)
-            tableView.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+            selectRows(IndexSet(), quietly: true)
+            selectRows(IndexSet(integer: row))
         }
     }
 
@@ -497,13 +582,82 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
         Task { Self.draggedFrom = nil }
     }
 
+    // MARK: Grid
+
+    func collectionView(_ collectionView: NSCollectionView, numberOfItemsInSection section: Int) -> Int {
+        items.count
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, itemForRepresentedObjectAt indexPath: IndexPath) -> NSCollectionViewItem {
+        let item = collectionView.makeItem(withIdentifier: GridTileItem.identifier, for: indexPath)
+        (item as? GridTileItem)?.configure(with: items[indexPath.item])
+        return item
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, didSelectItemsAt indexPaths: Set<IndexPath>) {
+        gridSelectionDidChange()
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, didDeselectItemsAt indexPaths: Set<IndexPath>) {
+        gridSelectionDidChange()
+    }
+
+    /// A click on another tile deselects and then selects, and only the result should reach the browser.
+    private func gridSelectionDidChange() {
+        guard !gridSelectionPending else { return }
+        gridSelectionPending = true
+        Task { [weak self] in
+            guard let self else { return }
+            self.gridSelectionPending = false
+            self.browser?.columnSelectionDidChange(self)
+        }
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, canDragItemsAt indexPaths: Set<IndexPath>, with event: NSEvent) -> Bool {
+        true
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, pasteboardWriterForItemAt indexPath: IndexPath) -> (any NSPasteboardWriting)? {
+        items[indexPath.item].url as NSURL
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, draggingSession session: NSDraggingSession, willBeginAt screenPoint: NSPoint, forItemsAt indexPaths: Set<IndexPath>) {
+        Self.draggedFrom = self
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, draggingSession session: NSDraggingSession, endedAt screenPoint: NSPoint, dragOperation operation: NSDragOperation) {
+        Task { Self.draggedFrom = nil }
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, validateDrop draggingInfo: any NSDraggingInfo, proposedIndexPath: AutoreleasingUnsafeMutablePointer<NSIndexPath>, dropOperation: UnsafeMutablePointer<NSCollectionView.DropOperation>) -> NSDragOperation {
+        let target = dropTarget(draggingInfo)
+        let operation = browser?.host?.dropOperation(draggingInfo, into: target.folder) ?? []
+        if !operation.isEmpty, target.row >= 0 {
+            proposedIndexPath.pointee = IndexPath(item: target.row, section: 0) as NSIndexPath
+            dropOperation.pointee = .on
+        }
+        return operation
+    }
+
+    func collectionView(_ collectionView: NSCollectionView, acceptDrop draggingInfo: any NSDraggingInfo, indexPath: IndexPath, dropOperation: NSCollectionView.DropOperation) -> Bool {
+        browser?.host?.acceptDrop(draggingInfo, into: dropTarget(draggingInfo).folder) ?? false
+    }
+
     // MARK: Drop
+
+    /// The row under a drag, in either form of the column.
+    private func row(under info: any NSDraggingInfo) -> Int {
+        if let grid {
+            return grid.indexPathForItem(at: grid.convert(info.draggingLocation, from: nil))?.item ?? -1
+        }
+        return tableView.row(at: tableView.convert(info.draggingLocation, from: nil))
+    }
 
     /// Resting on a folder selects it, which opens it in the next column, so a drop can reach any depth.
     /// A folder the drag can't go into won't open, but the one its items are already in does, for its subfolders.
     func updateSpringLoad(_ info: any NSDraggingInfo) {
-        let row = tableView.row(at: tableView.convert(info.draggingLocation, from: nil))
-        guard row >= 0, row < items.count, items[row].isFolder, tableView.selectedRowIndexes != IndexSet(integer: row) else {
+        let row = row(under: info)
+        guard row >= 0, row < items.count, items[row].isFolder, selectedRows != IndexSet(integer: row) else {
             springLoad.cancel()
             return
         }
@@ -522,7 +676,7 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     /// A folder row takes the drop. Anywhere else in the column means this column's folder.
     private func dropTarget(_ info: any NSDraggingInfo) -> (row: Int, folder: URL) {
-        let row = tableView.row(at: tableView.convert(info.draggingLocation, from: nil))
+        let row = row(under: info)
         if row >= 0, row < items.count, items[row].isFolder {
             return (row, items[row].url)
         }
@@ -557,7 +711,10 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
     // MARK: Actions
 
     @objc private func handleDoubleClick() {
-        let row = tableView.clickedRow
+        openItem(at: tableView.clickedRow)
+    }
+
+    func openItem(at row: Int) {
         guard row >= 0, row < items.count, !items[row].isFolder else { return }
         NSWorkspace.shared.open(items[row].url)
     }
@@ -584,15 +741,18 @@ final class BrowserColumnView: NSView, NSTableViewDataSource, NSTableViewDelegat
 
     /// For a click on the column's empty space.
     func backgroundMenu() -> NSMenu? {
-        guard !FileOperations.isOnCameraCard(folderURL) else { return nil }
         let menu = NSMenu()
-        if filter == .all {
-            let item = NSMenuItem(title: "New Folder", action: #selector(contextNewFolder), keyEquivalent: "")
-            item.target = self
-            menu.addItem(item)
+        if !FileOperations.isOnCameraCard(folderURL) {
+            if filter == .all {
+                let item = NSMenuItem(title: "New Folder", action: #selector(contextNewFolder), keyEquivalent: "")
+                item.target = self
+                menu.addItem(item)
+            }
+            addPasteItems(to: menu, into: folderURL)
+            if !menu.items.isEmpty { menu.addItem(.separator()) }
         }
-        addPasteItems(to: menu, into: folderURL)
-        return menu.items.isEmpty ? nil : menu
+        browser?.addViewOptionItems(to: menu)
+        return menu
     }
 
     private func addPasteItems(to menu: NSMenu, into folder: URL) {

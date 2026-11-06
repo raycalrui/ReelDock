@@ -4,6 +4,8 @@ final class SectionHeaderView: NSView {
     var onToggle: (() -> Void)?
     var onMaximize: (() -> Void)?
     var onReveal: (() -> Void)?
+    var onToggleGrid: (() -> Void)?
+    var makeSortMenu: (() -> NSMenu?)?
     var makeMenu: (() -> NSMenu?)?
     var dropOperation: ((any NSDraggingInfo) -> NSDragOperation)?
     var acceptDrop: ((any NSDraggingInfo) -> Bool)?
@@ -14,6 +16,8 @@ final class SectionHeaderView: NSView {
     private let tagDots = TagDotsView()
     private let maximizeButton = NSButton()
     private let revealButton = NSButton()
+    private let sortButton = NSButton()
+    private let gridButton = NSButton()
     private let separator = NSBox()
     private var canToggle = true
     private var opensOnHover = false
@@ -27,6 +31,16 @@ final class SectionHeaderView: NSView {
     var tags: [FinderTag] {
         get { tagDots.tags }
         set { tagDots.tags = newValue }
+    }
+
+    var isGrid = false {
+        didSet {
+            gridButton.image = NSImage(
+                systemSymbolName: isGrid ? "list.bullet" : "square.grid.2x2",
+                accessibilityDescription: isGrid ? "Show as List" : "Show as Grid"
+            )?.withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+            gridButton.toolTip = isGrid ? "Show as List" : "Show as Grid"
+        }
     }
 
     var isActive = false {
@@ -66,9 +80,24 @@ final class SectionHeaderView: NSView {
         revealButton.target = self
         revealButton.action = #selector(reveal)
 
+        for (button, symbol, description, action) in [
+            (sortButton, "arrow.up.arrow.down", "Sort By", #selector(showSortMenu)),
+            (gridButton, "square.grid.2x2", "Show as Grid", #selector(toggleGrid)),
+        ] {
+            button.isBordered = false
+            button.bezelStyle = .accessoryBarAction
+            button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: description)?
+                .withSymbolConfiguration(.init(pointSize: 10, weight: .regular))
+            button.contentTintColor = .secondaryLabelColor
+            button.imagePosition = .imageOnly
+            button.toolTip = description
+            button.target = self
+            button.action = action
+        }
+
         let spacer = NSView()
         spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let stack = NSStackView(views: [disclosure, titleLabel, countLabel, tagDots, spacer, maximizeButton, revealButton])
+        let stack = NSStackView(views: [disclosure, titleLabel, countLabel, tagDots, spacer, sortButton, gridButton, maximizeButton, revealButton])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 5
@@ -110,6 +139,8 @@ final class SectionHeaderView: NSView {
         canToggle = !isEmpty
         opensOnHover = !isEmpty && !expanded
         maximizeButton.isHidden = isEmpty
+        sortButton.isHidden = isEmpty
+        gridButton.isHidden = isEmpty
         let symbol = expanded ? "chevron.down" : "chevron.right"
         disclosure.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold))
@@ -170,6 +201,12 @@ final class SectionHeaderView: NSView {
         return operation
     }
 
+    @objc private func toggleGrid() { onToggleGrid?() }
+
+    @objc private func showSortMenu() {
+        makeSortMenu?()?.popUp(positioning: nil, at: NSPoint(x: 0, y: sortButton.bounds.maxY + 4), in: sortButton)
+    }
+
     @objc private func maximize() { onMaximize?() }
     @objc private func reveal() { onReveal?() }
 }
@@ -182,11 +219,11 @@ final class SectionPaneView: NSView {
     var isExpanded = true
     var weight: CGFloat = 1
 
-    init(section: FolderSection, host: BrowserHost) {
+    init(section: FolderSection, host: BrowserHost, sort: FileSort, isGrid: Bool) {
         self.section = section
         self.count = section.itemCount
         header = SectionHeaderView(title: section.title)
-        browser = ColumnBrowserView(rootURL: section.url, identifier: section.id, filesOnly: section.isFilesOnly, host: host)
+        browser = ColumnBrowserView(rootURL: section.url, identifier: section.id, filesOnly: section.isFilesOnly, host: host, sort: sort, isGrid: isGrid)
         super.init(frame: .zero)
         addSubview(browser)
         addSubview(header)
@@ -206,6 +243,11 @@ final class SectionPaneView: NSView {
             width: bounds.width,
             height: max(0, bounds.height - SectionStackView.headerHeight)
         )
+    }
+
+    /// A grid needs room for a whole row of tiles, or all it shows is the middle of one.
+    var minimumHeight: CGFloat {
+        browser.isGrid ? SectionStackView.minimumGridHeight : SectionStackView.minimumExpandedHeight
     }
 
     /// Used until the user drags a divider.
@@ -258,6 +300,7 @@ final class SectionDividerView: NSView {
 final class SectionStackView: NSView {
     static let headerHeight: CGFloat = 28
     static let minimumExpandedHeight: CGFloat = 96
+    static let minimumGridHeight: CGFloat = headerHeight + BrowserGridView.tileSize.height + 16
     private static let dividerGap: CGFloat = 1
     private static let dividerHitHeight: CGFloat = 7
 
@@ -275,9 +318,9 @@ final class SectionStackView: NSView {
     override var isFlipped: Bool { true }
 
     var requiredHeight: CGFloat {
-        let expanded = panes.indices.filter(effectiveExpanded).count
-        let collapsed = panes.count - expanded
-        return CGFloat(expanded) * Self.minimumExpandedHeight
+        let expanded = panes.indices.filter(effectiveExpanded)
+        let collapsed = panes.count - expanded.count
+        return expanded.reduce(CGFloat(0)) { $0 + panes[$1].minimumHeight }
             + CGFloat(collapsed) * Self.headerHeight
             + CGFloat(max(0, panes.count - 1)) * Self.dividerGap
     }
@@ -365,7 +408,7 @@ final class SectionStackView: NSView {
         while !open.isEmpty {
             let totalWeight = open.reduce(CGFloat(0)) { $0 + panes[$1].weight }
             let tooSmall = open.filter {
-                remaining * panes[$0].weight / totalWeight < Self.minimumExpandedHeight
+                remaining * panes[$0].weight / totalWeight < panes[$0].minimumHeight
             }
             if tooSmall.isEmpty {
                 for index in open {
@@ -374,8 +417,8 @@ final class SectionStackView: NSView {
                 break
             }
             for index in tooSmall {
-                heights[index] = Self.minimumExpandedHeight
-                remaining -= Self.minimumExpandedHeight
+                heights[index] = panes[index].minimumHeight
+                remaining -= panes[index].minimumHeight
             }
             open.removeAll { tooSmall.contains($0) }
         }
@@ -402,10 +445,10 @@ final class SectionStackView: NSView {
         let upperStart = dragStartHeights[dragPair.upper]
         let lowerStart = dragStartHeights[dragPair.lower]
         let sum = upperStart + lowerStart
-        let upperHeight = min(max(upperStart + delta, Self.minimumExpandedHeight), sum - Self.minimumExpandedHeight)
-
         let upper = panes[dragPair.upper]
         let lower = panes[dragPair.lower]
+        let upperHeight = min(max(upperStart + delta, upper.minimumHeight), sum - lower.minimumHeight)
+
         let weightSum = upper.weight + lower.weight
         upper.weight = weightSum * upperHeight / sum
         lower.weight = weightSum - upper.weight

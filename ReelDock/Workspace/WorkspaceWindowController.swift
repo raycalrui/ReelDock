@@ -254,6 +254,47 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         show(folder: folder, mode: mode)
     }
 
+    @objc func sortByKey(_ sender: NSMenuItem) {
+        guard let browser = content.viewOptionsBrowser, FileSortKey.allCases.indices.contains(sender.tag) else { return }
+        browser.setSort(browser.sort.choosing(FileSortKey.allCases[sender.tag]))
+    }
+
+    @objc func sortAscending(_ sender: Any?) {
+        guard let browser = content.viewOptionsBrowser else { return }
+        browser.setSort(FileSort(key: browser.sort.key, descending: false))
+    }
+
+    @objc func sortDescending(_ sender: Any?) {
+        guard let browser = content.viewOptionsBrowser else { return }
+        browser.setSort(FileSort(key: browser.sort.key, descending: true))
+    }
+
+    @objc func toggleGrid(_ sender: Any?) {
+        guard let browser = content.viewOptionsBrowser else { return }
+        browser.setGrid(!browser.isGrid)
+    }
+
+    /// Turning it on with no LUT for this clip's curve asks for one first.
+    @objc func togglePreviewLUT(_ sender: Any?) {
+        let luts = PreviewLUTs.shared
+        if luts.isEnabled {
+            if let gamma = selectedGamma, luts.paths[gamma] == nil {
+                app.chooseLUT(for: gamma, from: self)
+            } else {
+                luts.setEnabled(false)
+            }
+        } else if let gamma = selectedGamma ?? (luts.paths.isEmpty ? .sLog3 : nil), luts.paths[gamma] == nil {
+            app.chooseLUT(for: gamma, from: self, thenEnable: true)
+        } else {
+            luts.setEnabled(true)
+        }
+    }
+
+    private var selectedGamma: LogGamma? {
+        guard tab.selection.count == 1, tab.selection[0].isVideo else { return nil }
+        return LogFootage.knownGamma(of: tab.selection[0].url)
+    }
+
     @objc func toggleFavorite(_ sender: Any?) {
         guard let folder = tab.folder else { return }
         app.toggleFavorite(folder)
@@ -351,6 +392,22 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         case #selector(showSingleBrowser(_:)):
             menuItem.state = tab.mode == .single ? .on : .off
             return tab.folder != nil
+        case #selector(sortByKey(_:)):
+            let browser = content.viewOptionsBrowser
+            menuItem.state = browser.map { FileSortKey.allCases[menuItem.tag] == $0.sort.key } == true ? .on : .off
+            return browser != nil
+        case #selector(sortAscending(_:)):
+            menuItem.state = content.viewOptionsBrowser?.sort.descending == false ? .on : .off
+            return content.viewOptionsBrowser != nil
+        case #selector(sortDescending(_:)):
+            menuItem.state = content.viewOptionsBrowser?.sort.descending == true ? .on : .off
+            return content.viewOptionsBrowser != nil
+        case #selector(toggleGrid(_:)):
+            menuItem.state = content.viewOptionsBrowser?.isGrid == true ? .on : .off
+            return content.viewOptionsBrowser != nil
+        case #selector(togglePreviewLUT(_:)):
+            menuItem.state = PreviewLUTs.shared.isEnabled ? .on : .off
+            return true
         case #selector(toggleHiddenFiles(_:)):
             menuItem.state = app.settings.showHidden ? .on : .off
             return true
@@ -449,10 +506,11 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         return true
     }
 
-    private func transfer(_ kind: FileTransfer.Kind, sources: [URL], into destination: URL) {
+    private func transfer(_ kind: FileTransfer.Kind, sources: [URL], into destination: URL, whenFinished: (([FileTransfer.Item]) -> Void)? = nil) {
         let title = kind == .copy ? "Can't copy" : "Can't move"
         do {
             try FileTransfer.validate(sources: sources, destination: destination, kind: kind)
+            guard !app.transfers.isMovingAway(destination) else { throw FileOperationError.importing }
             let changing = FileTransfer.itemsThatWouldChange(sources, destination: destination, kind: kind)
             guard !changing.isEmpty else { return }
             if kind == .move {
@@ -461,6 +519,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
             }
             app.transfers.enqueue(kind, sources: changing, destination: destination) { [weak self] kind, items, failure in
                 self?.finishTransfer(kind, items: items, failure: failure, title: title)
+                whenFinished?(items)
             }
         } catch {
             showFileError(title, error)
@@ -650,6 +709,69 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         alert.beginSheetModal(for: window) { [weak self] response in
             guard response == .alertFirstButtonReturn else { return }
             self?.trashProject(at: url)
+        }
+    }
+
+    /// Uses the same verified move as any other, so the project only leaves once its copy has been read back.
+    func promptArchiveProject(at url: URL) {
+        guard let archive = app.projectArchiveURL else {
+            app.chooseProjectArchive(from: self) { [weak self] _ in self?.promptArchiveProject(at: url) }
+            return
+        }
+        guard let window else { return }
+        guard FileManager.default.fileExists(atPath: archive.path) else {
+            let alert = NSAlert()
+            alert.messageText = "The archive folder isn't available"
+            alert.informativeText = "\(archive.path) can't be found. Connect its drive, or choose another folder."
+            alert.addButton(withTitle: "Choose Folder…")
+            alert.addButton(withTitle: "Cancel")
+            alert.beginSheetModal(for: window) { [weak self] response in
+                guard response == .alertFirstButtonReturn else { return }
+                self?.app.chooseProjectArchive(from: self) { _ in self?.promptArchiveProject(at: url) }
+            }
+            return
+        }
+        guard !FileTransfer.isSameVolume(url, archive) else {
+            showFileError("Can't archive “\(url.lastPathComponent)”", message: "The archive folder is on the same drive as this project, so archiving wouldn't free any space. Choose another in Settings.")
+            return
+        }
+        let size = app.projectStats[url.lastPathComponent].map { ImportFormat.bytes($0.size) }
+        let free = (try? archive.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
+            .volumeAvailableCapacityForImportantUsage.map(ImportFormat.bytes)
+        let alert = NSAlert()
+        alert.messageText = "Archive “\(url.lastPathComponent)”?"
+        var lines = ["It's copied to \(archive.path), and every file is read back and checked. The project here then goes to the Trash, and the space comes back once the Trash is emptied."]
+        if let size, let free { lines.append("Project: \(size). Free on that drive: \(free).") }
+        alert.informativeText = lines.joined(separator: "\n\n")
+        alert.addButton(withTitle: "Archive")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            self?.transfer(.move, sources: [url], into: archive) { [weak self] items in
+                // The project has left, so tabs showing it go back to the project list rather than follow it to the drive.
+                for item in items {
+                    for controller in self?.app.controllers ?? [] where controller.tab.folder?.path.relocated(from: item.result.path, to: "") != nil {
+                        controller.folderDidDisappear()
+                    }
+                }
+            }
+        }
+    }
+
+    /// For a folder source, whose clips stay in place after an import. Only clips with a copy elsewhere come here.
+    func promptTrashImportedClips(_ urls: [URL], from folderName: String) {
+        guard let window, !urls.isEmpty else { return }
+        let alert = NSAlert()
+        alert.messageText = "Move \(urls.count) imported \(urls.count == 1 ? "clip" : "clips") in \(folderName) to the Trash?"
+        alert.informativeText = "Each one has a copy in your projects or archive. You can put them back with Undo or from the Trash."
+        alert.addButton(withTitle: "Move to Trash")
+        alert.addButton(withTitle: "Cancel")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            Task {
+                await self.moveToTrash(urls)
+                self.app.cards.rescanDownloads()
+            }
         }
     }
 
@@ -917,6 +1039,9 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
             menu.addItem(NSMenuItem.closure("Rename…") { [weak self] in
                 self?.promptRenameProject(at: url)
             })
+            menu.addItem(NSMenuItem.closure("Archive to External Drive…") { [weak self] in
+                self?.promptArchiveProject(at: url)
+            })
             menu.addItem(NSMenuItem.closure("Move to Trash…") { [weak self] in
                 self?.promptTrashProject(at: url)
             })
@@ -989,10 +1114,19 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
                 guard fullScreenPreview != nil || canPreviewFullScreen else { return false }
                 if !event.isARepeat { toggleFullScreenPreview() }
                 return true
-            case 125, 126 where inFullScreen: // Down and Up move through the list behind the preview.
-                window?.firstResponder?.keyDown(with: event)
+            case 5: // G
+                guard selectedGamma != nil else { break }
+                if !event.isARepeat { togglePreviewLUT(nil) }
                 return true
-            case 123, 124 where inFullScreen: // Left and Right would otherwise change the open columns unseen.
+            case 125 where inFullScreen, 126 where inFullScreen: // Down and Up move through the list behind the preview.
+                // One at a time in a grid too, where they'd otherwise skip a row and leave some pictures out of reach.
+                if let grid = window?.firstResponder as? BrowserGridView {
+                    grid.stepSelection(by: event.keyCode == 125 ? 1 : -1)
+                } else {
+                    window?.firstResponder?.keyDown(with: event)
+                }
+                return true
+            case 123 where inFullScreen, 124 where inFullScreen: // Left and Right would otherwise change the open columns unseen.
                 return true
             default:
                 break
@@ -1290,6 +1424,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
                 tab: tab,
                 screen: screen,
                 onChooseScreen: { [weak self] in self?.app.setPreviewDisplay($0.stableID) },
+                onToggleLUT: { [weak self] in self?.togglePreviewLUT(nil) },
                 onClose: { [weak self] in self?.toggleFullScreenPreview() }
             )
             fullScreenPreview = preview

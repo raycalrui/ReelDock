@@ -13,12 +13,14 @@ final class CardMonitor {
 
     @ObservationIgnored var onCardsChanged: (([CameraCard]) -> Void)?
     @ObservationIgnored private let ledger: ImportLedger
-    @ObservationIgnored private let roots: () -> (project: URL?, media: URL?)
+    @ObservationIgnored private let roots: () -> (project: URL?, media: URL?, archive: URL?)
+    @ObservationIgnored private var downloadsWatcher: FolderWatcher?
+    @ObservationIgnored private var downloadsScan = 0
     @ObservationIgnored private var observers: [any NSObjectProtocol] = []
     @ObservationIgnored private var scanGeneration = 0
     @ObservationIgnored private var presenceScan = 0
 
-    init(ledger: ImportLedger, roots: @escaping () -> (project: URL?, media: URL?)) {
+    init(ledger: ImportLedger, roots: @escaping () -> (project: URL?, media: URL?, archive: URL?)) {
         self.ledger = ledger
         self.roots = roots
     }
@@ -30,18 +32,43 @@ final class CardMonitor {
                 MainActor.assumeIsolated { self?.rescanVolumes() }
             })
         }
+        let downloads = DownloadedClips.folder.canonicalPath
+        downloadsWatcher = FolderWatcher(path: downloads) { [weak self] change in
+            if change.needsFullRescan || change.rootChanged || change.directories.contains(downloads) {
+                self?.rescanDownloads()
+            }
+        }
         rescanVolumes()
+    }
+
+    /// Downloads changes often, so this reads only that folder and does nothing more unless its clips changed.
+    func rescanDownloads() {
+        downloadsScan += 1
+        let scan = downloadsScan
+        let folder = DownloadedClips.folder
+        Task {
+            let found = await Task.detached(priority: .utility) { await DownloadedClips.read(folder) }.value
+            guard scan == downloadsScan else { return }
+            let next = cards.filter { !$0.isFolderSource } + (found.map { [$0] } ?? [])
+            guard next != cards else { return }
+            cards = next
+            onCardsChanged?(next)
+            refreshPresence()
+        }
     }
 
     func rescanVolumes() {
         scanGeneration += 1
         let generation = scanGeneration
+        let downloads = downloadsScan
         Task {
-            let found = await Task.detached(priority: .userInitiated) { Self.readCards() }.value
+            let found = await Task.detached(priority: .userInitiated) { await Self.readCards() }.value
             guard generation == scanGeneration else { return }
             cards = found
             onCardsChanged?(found)
             refreshPresence()
+            // Downloads changed during this slower scan, so what it read there may already be old.
+            if downloads != downloadsScan { rescanDownloads() }
         }
     }
 
@@ -54,26 +81,27 @@ final class CardMonitor {
     #endif
 
     /// The system volume is excluded, since a card is never the startup disk.
-    nonisolated private static func readCards() -> [CameraCard] {
+    nonisolated private static func readCards() async -> [CameraCard] {
         let volumes = FileManager.default.mountedVolumeURLs(
             includingResourceValuesForKeys: [.volumeNameKey],
             options: [.skipHiddenVolumes]
         ) ?? []
-        return volumes.filter { $0.path != "/" }.compactMap { volume in
+        let cards = volumes.filter { $0.path != "/" }.compactMap { volume -> CameraCard? in
             guard let adapter = CardAdapters.adapter(for: volume) else { return nil }
             return try? adapter.read(volume: volume)
         }
+        return cards + (await DownloadedClips.read(DownloadedClips.folder).map { [$0] } ?? [])
     }
 
     func refreshPresence() {
         presenceScan += 1
         let scan = presenceScan
         let clips = cards.flatMap(\.clips)
-        let (project, media) = roots()
+        let (project, media, archive) = roots()
         let ledger = ledger
         Task {
             let result = await Task.detached(priority: .userInitiated) { () -> [String: ClipPresence] in
-                let index = ClipIndex.scan(projectRoot: project, mediaRoot: media)
+                let index = ClipIndex.scan(projectRoot: project, mediaRoot: media, archiveRoot: archive)
                 var result: [String: ClipPresence] = [:]
                 for clip in clips {
                     result[clip.id] = ClipPresence.resolve(clip, ledger: ledger, index: index)

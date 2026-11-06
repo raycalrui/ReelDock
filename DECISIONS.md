@@ -2,6 +2,26 @@
 
 Lasting choices and why they were made. Dates are absolute.
 
+## 2026-11-06: A LUT only goes on footage that records its curve
+
+Sony's clips carry no color tags, and neither tags nor a filename can tell S-Log3 from a finished video, so a switch that applied to everything would wash out every output in the project. Sony writes `CaptureGammaEquation` in the last few KB of the MP4 and Blackmagic Camera writes `gamma` in an attribute, so the app reads those and leaves anything else alone. A trimmed copy loses Sony's trailer, so it plays as shot. There's a LUT per curve rather than one, because an S-Log3 LUT would get phone footage wrong, and Apple Log and Apple Log 2 use different gamuts. Blackmagic Camera calls both "Apple Log" in its metadata, so those two come from the track's tag: `com.apple.rec2020.apple-log` or `com.apple.apple-wide-gamut.apple-log`.
+
+## 2026-11-06: Previews use a custom compositor, not a filter handler
+
+A filter handler gets a color-managed image, with no way to set the matrix an untagged Sony clip lacks, while a LUT needs the raw values. A compositor gets the decoder's own buffers, so it uses the same pipeline as LUTBake, and declaring wide color and HDR support stops AVFoundation converting log frames first. Output matched ffmpeg on real clips, once ffmpeg was told what the file declares: Sony's clips are full range. A frame then looked darker once it played. Measured on screen by capturing the app's own window, macOS shows a picture tagged Rec. 709 with a gamma of 1.961 and a video layer with 2.4, and the two matched exactly that ratio in linear light. Raycal confirmed the picture is the one that matches Resolve. The player reads only the composition's own color and ignores tags on its frames, and nothing it accepts (709, sRGB, or no tag) comes out at 1.961. So frames for a video layer, including backward playback, are raised to the power 1.961 / 2.4 before display. Posters and the frame grid are pictures and stay as they are. After that, poster and player matched within 2 levels on two real clips.
+
+## 2026-11-06: Downloads is a source, not a watched inbox
+
+Phone clips arrive by AirDrop, and copying them is the same job as a card, so they use the same panel, queue, and verification. Clips are recognized by the attribute Blackmagic Camera writes rather than by filename, since reels are named by the user (`A001`, `18Pro001`). Its `camera_type` matches the folders already in the personal archive, so no mapping is needed. The originals stay until asked, because a copy is only proven once it's been used, and moving them follows what the panel can verify: a copy with the same name and size on disk.
+
+## 2026-11-06: Archiving is a move, and nothing is deleted
+
+It frees space only once the Trash is emptied, which is a step more than an archive tool would ask for. That follows the rule that the app has no permanent delete, and it leaves a way back from a drive that turns out to be bad. It refuses a folder on the same drive, where it would free nothing. Tabs return to the project list instead of following, so nobody keeps editing on a drive they're about to unplug.
+
+## 2026-11-06: A grid swaps the column's view, not the column
+
+Selection, file operations, menus, and spring loading all live in `BrowserColumnView`, so a grid is a second view inside it, with one small set of methods for what differs. A separate grid column would have duplicated all of them. The table stays as the list's view, and the column owns which is showing.
+
 ## 2026-11-04: Pastes use the import pipeline, not `FileManager.copyItem`
 
 Footage may not exist anywhere else, so every pasted file is hashed, read back, and verified like an import, and a folder appears only once all of it is done. This costs some time on large copies. The originals of a move across volumes go to the Trash rather than being deleted, so a mistake can still be undone.

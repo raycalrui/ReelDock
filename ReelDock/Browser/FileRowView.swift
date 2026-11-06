@@ -1,7 +1,7 @@
 import AppKit
 import QuickLookThumbnailing
 
-final class FileRowView: NSTableCellView {
+final class FileRowView: NSTableCellView, NameEditing {
     static let identifier = NSUserInterfaceItemIdentifier("FileRow")
     private static let iconSize: CGFloat = 20
     private static let sizeFormatter: ByteCountFormatter = {

@@ -58,6 +58,13 @@ final class FileTransferQueue {
         }
     }
 
+    /// Something added to a folder while it's being moved to another drive would be left behind in the Trash.
+    func isMovingAway(_ url: URL) -> Bool {
+        jobs.contains { job in
+            job.kind == .move && job.state.isActive && job.sources.contains { url.path.relocated(from: $0.path, to: "") != nil }
+        }
+    }
+
     func enqueue(_ kind: FileTransfer.Kind, sources: [URL], destination: URL, completion: @escaping Completion) {
         if !isActive { jobs.removeAll() }
         let job = Job(kind: kind, sources: sources, destination: destination)

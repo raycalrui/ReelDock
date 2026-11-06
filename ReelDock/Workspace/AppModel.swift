@@ -1,6 +1,7 @@
 import AppKit
 import Observation
 import SwiftUI
+import UniformTypeIdentifiers
 
 @Observable
 final class TabModel {
@@ -67,6 +68,8 @@ final class AppModel {
     @ObservationIgnored private var settingsWindow: NSWindow?
     @ObservationIgnored private var knownCardIDs: Set<String> = []
     @ObservationIgnored private var hasReadCards = false
+    /// Clips seen in a folder source, so that only a new arrival opens the panel.
+    @ObservationIgnored private var knownFolderClips: Set<String> = []
     /// Cards on their way out. A card stays here until it leaves the list, so nothing can start on it meanwhile.
     private(set) var ejectingCardIDs: Set<String> = []
     @ObservationIgnored private(set) var controllers: [WorkspaceWindowController] = []
@@ -81,12 +84,20 @@ final class AppModel {
         registry.removeLeftovers()
         partFiles = registry
 
-        var currentRoots: (() -> (project: URL?, media: URL?))?
-        let monitor = CardMonitor(ledger: ledger) { currentRoots?() ?? (nil, nil) }
+        var currentRoots: (() -> (project: URL?, media: URL?, archive: URL?))?
+        let monitor = CardMonitor(ledger: ledger) { currentRoots?() ?? (nil, nil, nil) }
         cards = monitor
         queue = ImportQueue(ledger: ledger, registry: registry, cards: monitor)
         transfers = FileTransferQueue(registry: registry)
-        currentRoots = { [weak self] in (self?.projectRootURL, self?.mediaRootURL) }
+        currentRoots = { [weak self] in (self?.projectRootURL, self?.mediaRootURL, self?.projectArchiveURL) }
+
+        PreviewLUTs.shared.configure(
+            isEnabled: loaded.usesPreviewLUTs,
+            paths: Dictionary(uniqueKeysWithValues: loaded.previewLUTs.compactMap { name, path in
+                LogGamma(rawValue: name).map { ($0, path) }
+            })
+        )
+        PreviewLUTs.shared.onChange = { [weak self] in self?.previewLUTsDidChange() }
 
         monitor.onCardsChanged = { [weak self] in self?.cardsDidChange($0) }
         watchProjectRoot()
@@ -104,6 +115,10 @@ final class AppModel {
 
     var mediaRootURL: URL? {
         settings.mediaRoot.map { URL(fileURLWithPath: $0, isDirectory: true) }
+    }
+
+    var projectArchiveURL: URL? {
+        settings.projectArchive.map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
     // MARK: Project root
@@ -249,14 +264,18 @@ final class AppModel {
 
     /// Every window updates. Only a newly inserted card opens a panel, and only in the front window.
     private func cardsDidChange(_ cards: [CameraCard]) {
-        let inserted = cards.first { !knownCardIDs.contains($0.id) }
+        let inserted = cards.first { !$0.isFolderSource && !knownCardIDs.contains($0.id) }
+        // Clips already in Downloads when the app launches don't open anything, since they may never be imported.
+        let folderClips = Set(cards.filter(\.isFolderSource).flatMap(\.clips).map(\.id))
+        let arrived = hasReadCards ? cards.first { $0.isFolderSource && $0.clips.contains { !knownFolderClips.contains($0.id) } } : nil
+        knownFolderClips = folderClips
         knownCardIDs = Set(cards.map(\.id))
         ejectingCardIDs.formIntersection(knownCardIDs)
         controllers.forEach { $0.cardsDidChange() }
         // A card that was already in when the app launched wasn't just inserted, so it stays quiet.
         if inserted != nil, hasReadCards { CardSound.inserted.play() }
         hasReadCards = true
-        guard let inserted else { return }
+        guard let inserted = inserted ?? arrived else { return }
         let target = frontController ?? addWindow()
         if !target.tab.isImportPanelVisible {
             target.showImportPanel(cardID: inserted.id)
@@ -310,14 +329,28 @@ final class AppModel {
     @discardableResult
     func startImport(_ clips: [CardClip], card: CameraCard, target: ImportTarget, from controller: WorkspaceWindowController?) -> Bool {
         guard !clips.isEmpty else { return false }
-        let destination: ImportDestination
+        let destination: (CardClip) -> ImportDestination
+        let probe: URL
+
+        // A clip landing inside a project on its way to another drive would miss the copy and go to the Trash with the original.
+        switch target {
+        case let .project(folder), let .exactFolder(folder):
+            guard !transfers.isMovingAway(folder) else {
+                showAlert("Can't import here", "\(folder.lastPathComponent) is being moved. Try again when that finishes.", controller)
+                return false
+            }
+        case .archive:
+            break
+        }
 
         switch target {
         case let .exactFolder(folder):
-            destination = .folder(folder)
+            destination = { _ in .folder(folder) }
+            probe = folder
         case let .project(folder):
             if let video = ImportRouting.videoFolder(inProject: folder) {
-                destination = .folder(video)
+                destination = { _ in .folder(video) }
+                probe = video
             } else if folder.deletingLastPathComponent().canonicalPath == projectRootURL?.canonicalPath {
                 // A project without a video folder: ask rather than guess.
                 chooseImportFolder(from: controller) { [weak self] chosen in
@@ -325,7 +358,8 @@ final class AppModel {
                 }
                 return false
             } else {
-                destination = .folder(folder)
+                destination = { _ in .folder(folder) }
+                probe = folder
             }
         case .archive:
             guard let mediaRoot = mediaRootURL else {
@@ -334,12 +368,20 @@ final class AppModel {
                 }
                 return false
             }
-            guard let device = card.deviceFolder ?? askForDeviceFolder(card: card) else { return false }
-            destination = .archive(mediaRoot: mediaRoot, deviceFolder: device)
+            // Clips that name their camera go to its folder, and the rest ask once.
+            var asked: String?
+            if clips.contains(where: { ($0.deviceFolder ?? card.deviceFolder) == nil }) {
+                guard let device = askForDeviceFolder(card: card) else { return false }
+                asked = device
+            }
+            destination = { [fallback = card.deviceFolder] clip in
+                .archive(mediaRoot: mediaRoot, deviceFolder: clip.deviceFolder ?? fallback ?? asked ?? "")
+            }
+            probe = mediaRoot
         }
 
         let needed = clips.reduce(0) { $0 + $1.size } + queue.remainingBytes
-        guard ImportRouting.hasEnoughSpace(needed, at: destination.volumeProbe) else {
+        guard ImportRouting.hasEnoughSpace(needed, at: probe) else {
             showAlert(
                 "Not enough space",
                 "These clips need \(ImportFormat.bytes(needed)), which is more than the destination has free. Nothing was copied.",
@@ -347,7 +389,7 @@ final class AppModel {
             )
             return false
         }
-        queue.enqueue(clips, cardID: card.id) { _ in destination }
+        queue.enqueue(clips, cardID: card.id, destination: destination)
         return true
     }
 
@@ -369,7 +411,7 @@ final class AppModel {
 
     /// Ejecting can take many seconds while a card flushes, so it never runs on the main thread.
     func eject(_ card: CameraCard, from controller: WorkspaceWindowController?) {
-        guard !queue.isActive(cardID: card.id), ejectingCardIDs.insert(card.id).inserted else { return }
+        guard !card.isFolderSource, !queue.isActive(cardID: card.id), ejectingCardIDs.insert(card.id).inserted else { return }
         // An open clip would keep the volume busy.
         controllers.forEach { $0.tab.playback.release(under: card.volumeURL) }
         Task { [weak self, weak controller] in
@@ -630,7 +672,90 @@ final class AppModel {
     func debugSetMediaRoot(_ path: String) {
         settings.mediaRoot = path
     }
+
+    func debugSetProjectArchive(_ path: String) {
+        settings.projectArchive = path
+        cards.refreshPresence()
+    }
     #endif
+
+    // MARK: Preview LUTs
+
+    private func previewLUTsDidChange() {
+        settings.usesPreviewLUTs = PreviewLUTs.shared.isEnabled
+        settings.previewLUTs = Dictionary(uniqueKeysWithValues: PreviewLUTs.shared.paths.map { ($0.rawValue, $1) })
+        saveNow()
+        controllers.forEach { $0.tab.playback.updateGrade() }
+    }
+
+    /// Starts in Resolve's own LUT folder for S-Log3, or wherever this curve's LUT is now.
+    func chooseLUT(for gamma: LogGamma, from controller: WorkspaceWindowController?, thenEnable: Bool = false) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [UTType(filenameExtension: "cube") ?? .data]
+        panel.prompt = "Choose"
+        panel.message = "Choose a .cube LUT for \(gamma.rawValue) footage. It's only used for previews, and files stay as they are."
+        let resolve = URL(fileURLWithPath: "/Library/Application Support/Blackmagic Design/DaVinci Resolve/LUT", isDirectory: true)
+        let sony = resolve.appendingPathComponent("Sony", isDirectory: true)
+        panel.directoryURL = PreviewLUTs.shared.paths[gamma].map { URL(fileURLWithPath: $0).deletingLastPathComponent() }
+            ?? (gamma == .sLog3 && FileManager.default.fileExists(atPath: sony.path) ? sony : resolve)
+        let handler: (NSApplication.ModalResponse) -> Void = { [weak self, weak controller] response in
+            guard response == .OK, let url = panel.url else { return }
+            Task {
+                do {
+                    try await PreviewLUTs.shared.choose(url, for: gamma)
+                    if thenEnable { PreviewLUTs.shared.setEnabled(true) }
+                } catch {
+                    self?.showAlert("Can't use this LUT", error.localizedDescription, controller)
+                }
+            }
+        }
+        if let window = controller?.window {
+            panel.beginSheetModal(for: window, completionHandler: handler)
+        } else {
+            handler(panel.runModal())
+        }
+    }
+
+    // MARK: Project archive
+
+    /// Must be on another drive, because moving a project within one wouldn't free any space.
+    func chooseProjectArchive(from controller: WorkspaceWindowController?, completion: ((URL) -> Void)? = nil) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Choose"
+        panel.message = "Choose a folder on your external drive. Archived projects go inside it."
+        panel.directoryURL = projectArchiveURL ?? URL(fileURLWithPath: "/Volumes", isDirectory: true)
+        let handler: (NSApplication.ModalResponse) -> Void = { [weak self, weak controller] response in
+            guard let self, response == .OK, let url = panel.url else { return }
+            if let root = self.projectRootURL, FileTransfer.isSameVolume(url, root) {
+                self.showAlert("Choose a folder on another drive", "This folder is on the same drive as your projects, so archiving wouldn't free any space.", controller)
+                return
+            }
+            guard !FileOperations.isOnCameraCard(url) else {
+                self.showAlert("Choose a folder on another drive", FileOperationError.cameraCard.localizedDescription, controller)
+                return
+            }
+            self.settings.projectArchive = url.path
+            self.saveNow()
+            self.cards.refreshPresence()
+            completion?(url)
+        }
+        if let window = controller?.window {
+            panel.beginSheetModal(for: window, completionHandler: handler)
+        } else {
+            handler(panel.runModal())
+        }
+    }
+
+    func clearProjectArchive() {
+        settings.projectArchive = nil
+        saveNow()
+        cards.refreshPresence()
+    }
 
     func clearMediaRoot() {
         settings.mediaRoot = nil
@@ -638,9 +763,16 @@ final class AppModel {
         cards.refreshPresence()
     }
 
-    /// Open tabs rebuild, so the change shows right away.
+    var hasSectionLayout: Bool {
+        settings.sections.values.contains { $0.heightWeight != nil || $0.collapsed != nil }
+    }
+
+    /// Open tabs rebuild, so the change shows right away. How a section sorts and whether it's a grid stay as chosen.
     func resetSectionLayout() {
-        settings.sections = [:]
+        for key in settings.sections.keys {
+            settings.sections[key]?.heightWeight = nil
+            settings.sections[key]?.collapsed = nil
+        }
         saveNow()
         for controller in controllers {
             guard let folder = controller.tab.folder else { continue }

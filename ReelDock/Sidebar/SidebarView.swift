@@ -48,7 +48,7 @@ struct SidebarView: View {
     var body: some View {
         List(selection: selection) {
             if !app.cards.cards.isEmpty {
-                Section("Cards") {
+                Section("Import") {
                     ForEach(app.cards.cards) { card in
                         cardRow(card)
                     }
@@ -161,7 +161,7 @@ struct SidebarView: View {
                 Label {
                     Text(card.volumeName).lineLimit(1)
                 } icon: {
-                    Image(systemName: isOpen ? "sdcard.fill" : "sdcard")
+                    Image(systemName: card.isFolderSource ? "iphone" : (isOpen ? "sdcard.fill" : "sdcard"))
                         .foregroundStyle(isOpen ? Color.accentColor : Color.secondary)
                 }
                 Spacer()
@@ -179,8 +179,10 @@ struct SidebarView: View {
         .buttonStyle(.plain)
         .contextMenu {
             Button("Import…") { controller?.showImportPanel(cardID: card.id) }
-            Button("Eject") { app.eject(card, from: controller) }
-                .disabled(app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id))
+            if !card.isFolderSource {
+                Button("Eject") { app.eject(card, from: controller) }
+                    .disabled(app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id))
+            }
         }
     }
 

@@ -22,6 +22,32 @@ struct SettingsView: View {
                         .disabled(app.settings.mediaRoot == nil)
                     Button("Choose…") { app.chooseMediaRoot(from: nil) }
                 }
+                folderRow(
+                    "Project Archive",
+                    path: app.settings.projectArchive,
+                    note: nil
+                ) {
+                    Button("Clear") { app.clearProjectArchive() }
+                        .disabled(app.settings.projectArchive == nil)
+                    Button("Choose…") { app.chooseProjectArchive(from: nil) }
+                }
+            }
+            Section("Preview") {
+                Toggle("Show log footage with its LUT", isOn: Binding(
+                    get: { PreviewLUTs.shared.isEnabled },
+                    set: { PreviewLUTs.shared.setEnabled($0) }
+                ))
+                ForEach(LogGamma.allCases, id: \.self) { gamma in
+                    folderRow(
+                        "\(gamma.rawValue) LUT",
+                        path: PreviewLUTs.shared.paths[gamma].map { ($0 as NSString).lastPathComponent },
+                        note: nil
+                    ) {
+                        Button("Clear") { PreviewLUTs.shared.clear(gamma) }
+                            .disabled(PreviewLUTs.shared.paths[gamma] == nil)
+                        Button("Choose…") { app.chooseLUT(for: gamma, from: nil) }
+                    }
+                }
             }
             Section("Browsing") {
                 Toggle("Show hidden files", isOn: Binding(
@@ -30,7 +56,7 @@ struct SettingsView: View {
                 ))
                 LabeledContent {
                     Button("Reset") { app.resetSectionLayout() }
-                        .disabled(app.settings.sections.isEmpty)
+                        .disabled(!app.hasSectionLayout)
                 } label: {
                     Text("Section layout")
                     Text("Heights and collapsed sections go back to their defaults.")

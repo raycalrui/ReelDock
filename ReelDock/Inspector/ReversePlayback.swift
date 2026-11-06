@@ -74,7 +74,7 @@ nonisolated enum ReverseDecoder {
         return CMTimeRange(start: CMTimeMaximum(.zero, CMTimeMinimum(start, target)), end: end)
     }
 
-    static func decode(_ range: CMTimeRange, of source: Source, stride: Int) throws -> [ReverseFrame] {
+    static func decode(_ range: CMTimeRange, of source: Source, stride: Int, grade: PreviewGrade? = nil) throws -> [ReverseFrame] {
         let reader = try AVAssetReader(asset: source.asset)
         reader.timeRange = range
         let output = AVAssetReaderTrackOutput(track: source.track, outputSettings: [
@@ -89,6 +89,7 @@ nonisolated enum ReverseDecoder {
 
         var frames: [ReverseFrame] = []
         var index = 0
+        var pool: CVPixelBufferPool?
         while let sample = output.copyNextSampleBuffer() {
             guard !Task.isCancelled else {
                 reader.cancelReading()
@@ -97,8 +98,9 @@ nonisolated enum ReverseDecoder {
             let time = CMSampleBufferGetPresentationTimeStamp(sample)
             guard CMSampleBufferGetImageBuffer(sample) != nil, time >= range.start, time < range.end else { continue }
             if index % stride == 0 {
-                showImmediately(sample)
-                frames.append(ReverseFrame(time: time, sample: sample))
+                let shown = grade?.gradedSample(sample, pool: &pool) ?? sample
+                showImmediately(shown)
+                frames.append(ReverseFrame(time: time, sample: shown))
             }
             index += 1
         }
@@ -134,6 +136,7 @@ final class ReverseEngine {
     var onFailed: (() -> Void)?
 
     private let url: URL
+    private let grade: PreviewGrade?
     private var speed: Double
     private var source: ReverseDecoder.Source?
     private var pending: [ReverseFrame] = []
@@ -145,8 +148,9 @@ final class ReverseEngine {
     private var anchorPosition: Double
     private var anchorClock = CACurrentMediaTime()
 
-    init(url: URL, from position: CMTime, speed: Double) {
+    init(url: URL, from position: CMTime, speed: Double, grade: PreviewGrade? = nil) {
         self.url = url
+        self.grade = grade
         self.position = position
         self.speed = speed
         nextEnd = position + CMTime(value: 1, timescale: 1000)
@@ -234,9 +238,10 @@ final class ReverseEngine {
         let end = nextEnd
         let stride = ReverseDecoder.frameStride(frameRate: source.frameRate, speed: speed)
         let generation = generation
+        let grade = grade
         decoding = Task.detached(priority: .userInitiated) { [weak self] in
             let range = ReverseDecoder.window(endingAt: end, in: source)
-            let result = Result { try ReverseDecoder.decode(range, of: source, stride: stride) }
+            let result = Result { try ReverseDecoder.decode(range, of: source, stride: stride, grade: grade) }
             await self?.finishDecoding(result, start: range.start, generation: generation)
         }
     }

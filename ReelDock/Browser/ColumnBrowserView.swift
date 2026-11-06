@@ -18,6 +18,8 @@ protocol BrowserHost: AnyObject {
     func transferPastedFiles(_ kind: FileTransfer.Kind, into folder: URL)
     func dropOperation(_ info: any NSDraggingInfo, into folder: URL) -> NSDragOperation
     func acceptDrop(_ info: any NSDraggingInfo, into folder: URL) -> Bool
+    /// The sort or the grid changed, and the choice should be kept.
+    func browserDidChangeViewOptions(_ browser: ColumnBrowserView)
 }
 
 private final class FlippedView: NSView {
@@ -37,16 +39,20 @@ final class ColumnBrowserView: NSView {
     private weak var focusedColumn: BrowserColumnView?
 
     var showHidden: Bool { host?.showHidden ?? false }
+    private(set) var sort: FileSort
+    private(set) var isGrid: Bool
 
     #if DEBUG
     var debugScrollView: NSScrollView { scrollView }
     #endif
 
-    init(rootURL: URL, identifier: String, filesOnly: Bool, host: BrowserHost) {
+    init(rootURL: URL, identifier: String, filesOnly: Bool, host: BrowserHost, sort: FileSort = .standard, isGrid: Bool = false) {
         self.rootURL = rootURL
         self.identifier_ = identifier
         self.rootFilter = filesOnly ? .filesOnly : .all
         self.host = host
+        self.sort = sort
+        self.isGrid = isGrid
         super.init(frame: .zero)
 
         scrollView.documentView = container
@@ -98,6 +104,7 @@ final class ColumnBrowserView: NSView {
     private func appendColumn(_ url: URL, filter: BrowserColumnView.Filter = .all) -> BrowserColumnView {
         let column = BrowserColumnView(folderURL: url, filter: filter)
         column.browser = self
+        column.setGrid(isGrid)
         columns.append(column)
         container.addSubview(column)
         needsLayout = true
@@ -175,9 +182,9 @@ final class ColumnBrowserView: NSView {
 
     func moveFocusRight(from column: BrowserColumnView) {
         guard let child = nextColumn(after: column), !child.items.isEmpty else { return }
-        window?.makeFirstResponder(child.tableView)
+        window?.makeFirstResponder(child.focusView)
         if child.selectedItems.isEmpty {
-            child.tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            child.selectRows(IndexSet(integer: 0))
         }
         container.scrollToVisible(child.frame)
     }
@@ -186,16 +193,16 @@ final class ColumnBrowserView: NSView {
         guard let parent = previousColumn(before: column) else { return }
         column.clearSelectionSilently()
         truncate(after: column)
-        window?.makeFirstResponder(parent.tableView)
+        window?.makeFirstResponder(parent.focusView)
         container.scrollToVisible(parent.frame)
     }
 
     /// Moves keyboard focus here. Selecting the first row is optional, because selecting a folder opens it.
     func focus(selectingFirstRow: Bool = false) {
         guard let column = focusedColumn ?? columns.first else { return }
-        window?.makeFirstResponder(column.tableView)
+        window?.makeFirstResponder(column.focusView)
         if selectingFirstRow, column.selectedItems.isEmpty, !column.items.isEmpty {
-            column.tableView.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+            column.selectRows(IndexSet(integer: 0))
         }
     }
 
@@ -209,6 +216,57 @@ final class ColumnBrowserView: NSView {
             if !selection.isEmpty { return selection }
         }
         return []
+    }
+
+    // MARK: View options
+
+    func setSort(_ newSort: FileSort) {
+        guard newSort != sort else { return }
+        sort = newSort
+        reloadAll()
+        host?.browserDidChangeViewOptions(self)
+    }
+
+    func setGrid(_ newValue: Bool) {
+        guard newValue != isGrid else { return }
+        isGrid = newValue
+        columns.forEach { $0.setGrid(newValue) }
+        host?.browserDidChangeViewOptions(self)
+    }
+
+    /// The same choices as the View menu, for a context menu or a section's button.
+    func addViewOptionItems(to menu: NSMenu) {
+        let sortItem = NSMenuItem(title: "Sort By", action: nil, keyEquivalent: "")
+        sortItem.submenu = sortMenu()
+        menu.addItem(sortItem)
+        let gridItem = NSMenuItem.closure("Show as Grid") { [weak self] in
+            guard let self else { return }
+            self.setGrid(!self.isGrid)
+        }
+        gridItem.state = isGrid ? .on : .off
+        menu.addItem(gridItem)
+    }
+
+    func sortMenu() -> NSMenu {
+        let menu = NSMenu()
+        for key in FileSortKey.allCases {
+            let item = NSMenuItem.closure(key.title) { [weak self] in
+                guard let self else { return }
+                self.setSort(self.sort.choosing(key))
+            }
+            item.state = sort.key == key ? .on : .off
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        for (title, descending) in [("Ascending", false), ("Descending", true)] {
+            let item = NSMenuItem.closure(title) { [weak self] in
+                guard let self else { return }
+                self.setSort(FileSort(key: self.sort.key, descending: descending))
+            }
+            item.state = sort.descending == descending ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
     }
 
     // MARK: File operations
@@ -271,7 +329,7 @@ final class ColumnBrowserView: NSView {
 
     func trashSelection() {
         guard canTrashSelection, let column = selectionColumn, let host else { return }
-        let rows = column.tableView.selectedRowIndexes
+        let rows = column.selectedRows
         let urls = column.selectedItems.map(\.url)
         Task {
             await host.moveToTrash(urls)

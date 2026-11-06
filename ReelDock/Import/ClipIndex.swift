@@ -15,20 +15,20 @@ nonisolated struct ClipIndex: Sendable {
         paths[Self.key(name: name, size: size), default: []].append(path)
     }
 
-    /// Scans video folders in every project and in the personal archive.
-    static func scan(projectRoot: URL?, mediaRoot: URL?) -> ClipIndex {
+    /// Scans video folders in every project, the project archive if its drive is connected, and the personal archive.
+    static func scan(projectRoot: URL?, mediaRoot: URL?, archiveRoot: URL? = nil) -> ClipIndex {
         var index = ClipIndex()
-        for folder in videoFolders(projectRoot: projectRoot, mediaRoot: mediaRoot) {
+        for folder in videoFolders(projectRoot: projectRoot, mediaRoot: mediaRoot, archiveRoot: archiveRoot) {
             index.addFiles(under: folder)
         }
         return index
     }
 
-    static func videoFolders(projectRoot: URL?, mediaRoot: URL?) -> [URL] {
+    static func videoFolders(projectRoot: URL?, mediaRoot: URL?, archiveRoot: URL? = nil) -> [URL] {
         var folders: [URL] = []
         let manager = FileManager.default
-        if let projectRoot {
-            for project in (try? FolderReader.read(projectRoot, showHidden: false)) ?? [] where project.isFolder {
+        for root in [projectRoot, archiveRoot].compactMap({ $0 }) {
+            for project in (try? FolderReader.read(root, showHidden: false)) ?? [] where project.isFolder {
                 let children = (try? FolderReader.read(project.url, showHidden: false)) ?? []
                 folders += children.filter { $0.isFolder && ImportRouting.isVideoFolderName($0.name) }.map(\.url)
             }
@@ -78,7 +78,7 @@ nonisolated struct ClipPresence: Equatable, Sendable {
         return ClipPresence(existingPaths: paths, isInLedger: !recorded.isEmpty)
     }
 
-    func status(currentFolder: URL?, projectRoot: URL?, mediaRoot: URL?) -> ClipStatus {
+    func status(currentFolder: URL?, projectRoot: URL?, mediaRoot: URL?, archiveRoot: URL? = nil) -> ClipStatus {
         if let currentFolder {
             let prefix = currentFolder.path + "/"
             if let path = existingPaths.first(where: { $0.hasPrefix(prefix) }) {
@@ -86,16 +86,20 @@ nonisolated struct ClipPresence: Equatable, Sendable {
             }
         }
         if let path = existingPaths.first {
-            return .elsewhere(path: path, place: Self.placeName(path: path, projectRoot: projectRoot, mediaRoot: mediaRoot))
+            return .elsewhere(path: path, place: Self.placeName(path: path, projectRoot: projectRoot, mediaRoot: mediaRoot, archiveRoot: archiveRoot))
         }
         return isInLedger ? .importedMissing : .new
     }
 
     /// The project's folder name, `media/202611`, or else the containing folder's name.
-    static func placeName(path: String, projectRoot: URL?, mediaRoot: URL?) -> String {
+    static func placeName(path: String, projectRoot: URL?, mediaRoot: URL?, archiveRoot: URL? = nil) -> String {
         if let projectRoot, path.hasPrefix(projectRoot.path + "/") {
             let relative = path.dropFirst(projectRoot.path.count + 1)
             return relative.split(separator: "/").first.map(String.init) ?? projectRoot.lastPathComponent
+        }
+        if let archiveRoot, path.hasPrefix(archiveRoot.path + "/") {
+            let relative = path.dropFirst(archiveRoot.path.count + 1)
+            return relative.split(separator: "/").first.map(String.init) ?? archiveRoot.lastPathComponent
         }
         if let mediaRoot, path.hasPrefix(mediaRoot.path + "/") {
             let relative = path.dropFirst(mediaRoot.path.count + 1)

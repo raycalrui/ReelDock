@@ -51,6 +51,8 @@ nonisolated struct CardClip: Identifiable, Hashable, Sendable {
     var lens: String?
     var gamma: String?
     var thumbnailURL: URL?
+    /// Folder name under `video` in the personal archive, when it's known per clip rather than per card.
+    var deviceFolder: String?
 
     var id: String { url.path }
 
@@ -69,6 +71,8 @@ nonisolated struct CameraCard: Identifiable, Hashable, Sendable {
     /// Folder name under `video` in the personal archive. Nil means the camera isn't known.
     let deviceFolder: String?
     let clips: [CardClip]
+    /// A folder clips arrive in, rather than a card. It's a normal folder, so it has nothing to eject.
+    var isFolderSource = false
 
     var id: String { volumeURL.path }
 }
@@ -148,6 +152,63 @@ nonisolated struct SonyCardAdapter: CardAdapter {
             cameraModel: model,
             deviceFolder: model.flatMap { Self.deviceFolders[$0] },
             clips: clips
+        )
+    }
+}
+
+/// Clips from the Blackmagic Camera app, which AirDrop leaves in Downloads. Only ever reads.
+/// A clip is recognized by the metadata the app writes, so other videos in Downloads stay out of it.
+nonisolated enum DownloadedClips {
+    static var folder: URL {
+        #if DEBUG
+        if let override = ProcessInfo.processInfo.environment["REELDOCK_DOWNLOADS_DIR"] {
+            return URL(fileURLWithPath: override, isDirectory: true)
+        }
+        #endif
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+    }
+
+    /// Nil when there's nothing to import, so the source only shows up once there is.
+    static func read(_ folder: URL) async -> CameraCard? {
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
+        let files = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: Array(keys), options: [])) ?? []
+        var clips: [CardClip] = []
+        for url in files {
+            guard !url.lastPathComponent.hasPrefix("."), ["mov", "mp4"].contains(url.pathExtension.lowercased()),
+                  let info = BlackmagicClipInfo.read(url),
+                  let values = try? url.resourceValues(forKeys: keys), values.isRegularFile == true else { continue }
+            var found = clip(url, info: info, size: Int64(values.fileSize ?? 0), modified: values.contentModificationDate)
+            // The app calls Apple Log 2 "Apple Log", and the clip's own tag says which it is.
+            if let gamma = await LogFootage.gamma(of: url) { found.gamma = gamma.rawValue }
+            clips.append(found)
+        }
+        guard !clips.isEmpty else { return nil }
+        return CameraCard(
+            volumeURL: folder,
+            volumeName: folder.lastPathComponent,
+            adapterName: "Blackmagic Camera",
+            cameraModel: nil,
+            deviceFolder: nil,
+            clips: clips,
+            isFolderSource: true
+        )
+    }
+
+    /// The camera's name is also the folder real archives use, like `iPhone 18 Pro`.
+    static func clip(_ url: URL, info: BlackmagicClipInfo, size: Int64, modified: Date?) -> CardClip {
+        CardClip(
+            url: url,
+            name: url.lastPathComponent,
+            size: size,
+            time: info.time ?? modified.map(ClipTime.init(fileDate:)),
+            durationFrames: info.frameCount,
+            frameRateLabel: info.frameRate.map { String(format: "%.2fp", $0) },
+            codec: info.codec,
+            width: info.width,
+            height: info.height,
+            lens: info.lens,
+            gamma: info.gamma,
+            deviceFolder: info.cameraType
         )
     }
 }

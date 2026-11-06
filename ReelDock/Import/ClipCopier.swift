@@ -67,7 +67,8 @@ nonisolated enum ClipCopier {
 
     /// Copies to a hidden temporary file, verifies what reached the disk, then moves it into place.
     /// The source is opened read-only, and no existing file is ever replaced.
-    static func copy(source: URL, toFolder folder: URL, control: CopyControl, hooks: Hooks = Hooks()) throws -> Output {
+    /// `keepingAttributes` names extended attributes to carry over. They go on before the file appears.
+    static func copy(source: URL, toFolder folder: URL, control: CopyControl, hooks: Hooks = Hooks(), keepingAttributes keep: (String) -> Bool = { _ in false }) throws -> Output {
         let attributes: [FileAttributeKey: Any]
         do {
             attributes = try FileManager.default.attributesOfItem(atPath: source.path)
@@ -92,6 +93,8 @@ nonisolated enum ClipCopier {
         control.setVerifying(true)
         let writtenHash = try hash(of: part, control: control)
         guard writtenHash == sourceHash else { throw Failure.verificationMismatch }
+
+        ExtendedAttributes.copy(from: source, to: part, where: keep)
 
         var dates: [FileAttributeKey: Any] = [:]
         dates[.creationDate] = attributes[.creationDate]

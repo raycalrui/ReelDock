@@ -4,6 +4,8 @@ nonisolated struct SectionPreference: Codable, Equatable, Sendable {
     /// Saved after a divider drag. Named apart from the old `weight` key, whose values used another default scale.
     var heightWeight: Double?
     var collapsed: Bool?
+    var sort: FileSort?
+    var isGrid: Bool?
 }
 
 nonisolated struct TabSnapshot: Codable, Equatable, Sendable {
@@ -51,6 +53,11 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
     var importPanelFraction: Double?
     /// The display full-screen previews open on.
     var previewDisplay: String?
+    /// The `.cube` file for each log curve, by the curve's name.
+    var previewLUTs: [String: String] = [:]
+    var usesPreviewLUTs = false
+    /// A folder on another drive, where finished projects go.
+    var projectArchive: String?
 
     init() {}
 
@@ -65,6 +72,9 @@ nonisolated struct AppSettings: Codable, Equatable, Sendable {
         showHidden = try container.decodeIfPresent(Bool.self, forKey: .showHidden) ?? false
         importPanelFraction = try container.decodeIfPresent(Double.self, forKey: .importPanelFraction)
         previewDisplay = try container.decodeIfPresent(String.self, forKey: .previewDisplay)
+        previewLUTs = try container.decodeIfPresent([String: String].self, forKey: .previewLUTs) ?? [:]
+        usesPreviewLUTs = try container.decodeIfPresent(Bool.self, forKey: .usesPreviewLUTs) ?? false
+        projectArchive = try container.decodeIfPresent(String.self, forKey: .projectArchive)
     }
 }
 

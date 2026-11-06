@@ -54,6 +54,8 @@ final class PlaybackController {
     @ObservationIgnored private var isHandingOff = false
     @ObservationIgnored private var handoffID = 0
     @ObservationIgnored private var handoffRate: Float?
+    @ObservationIgnored private var appliedGrade: PreviewGrade?
+    @ObservationIgnored private var gradeTask: Task<Void, Never>?
     @ObservationIgnored private let surfaces = NSHashTable<PlayerSurfaceView>.weakObjects()
     #if DEBUG
     @ObservationIgnored private(set) var debugReverseFrames: [(clock: Double, time: Double, displayed: Int)] = []
@@ -106,6 +108,9 @@ final class PlaybackController {
     }
 
     func unload() {
+        gradeTask?.cancel()
+        gradeTask = nil
+        appliedGrade = nil
         reverse?.stop()
         reverse = nil
         isHandingOff = false
@@ -184,6 +189,35 @@ final class PlaybackController {
     func endScrub() {
         if rateBeforeScrub != 0 { start(rate: rateBeforeScrub) }
         rateBeforeScrub = 0
+    }
+
+    // MARK: Preview LUT
+
+    /// Brings the open clip in line with the chosen LUT. Works during playback, and does nothing if no file is open.
+    func updateGrade() {
+        gradeTask?.cancel()
+        guard let url, let item = player.currentItem else { return }
+        gradeTask = Task { [weak self] in
+            let grade = await PreviewLUTs.shared.grade(forClipAt: url)
+            let composition = await grade?.composition(for: item.asset, forVideoLayer: true)
+            guard let self, !Task.isCancelled, self.player.currentItem === item, grade !== self.appliedGrade else { return }
+            self.appliedGrade = grade
+            item.videoComposition = composition
+            self.redrawAfterGradeChange()
+        }
+    }
+
+    /// A paused player keeps its last frame until it's asked for one again.
+    private func redrawAfterGradeChange() {
+        if let reverse {
+            let position = reverse.position
+            let currentRate = rate
+            reverse.stop()
+            self.reverse = nil
+            startReverse(rate: currentRate, from: position)
+        } else if rate == 0, !isSeeking, !isHandingOff, player.currentItem?.status == .readyToPlay {
+            seek(to: player.currentTime().seconds)
+        }
     }
 
     // MARK: Surfaces
@@ -272,14 +306,14 @@ final class PlaybackController {
     }
 
     /// `AVPlayer` stands still underneath while the engine shows frames on the same surfaces.
-    private func startReverse(rate newRate: Float) {
+    private func startReverse(rate newRate: Float, from position: CMTime? = nil) {
         let speed = Double(-newRate)
         if let reverse {
             reverse.setSpeed(speed)
             rate = newRate
             return
         }
-        let from = isSeeking ? CMTime(seconds: time, preferredTimescale: 600) : player.currentTime()
+        let from = position ?? (isSeeking ? CMTime(seconds: time, preferredTimescale: 600) : player.currentTime())
         guard let url, from > .zero else { return }
         handoffRate = nil
         player.pause()
@@ -287,7 +321,7 @@ final class PlaybackController {
         debugReverseFrames = []
         #endif
 
-        let engine = ReverseEngine(url: url, from: from, speed: speed)
+        let engine = ReverseEngine(url: url, from: from, speed: speed, grade: appliedGrade)
         engine.onLoaded = { [weak self] source in
             guard let self else { return }
             self.reverseRotation = source.rotation
@@ -395,6 +429,7 @@ final class PlaybackController {
         player.replaceCurrentItem(with: item)
         isLoaded = true
         failed = false
+        updateGrade()
         return true
     }
 

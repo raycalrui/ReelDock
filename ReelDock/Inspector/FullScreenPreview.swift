@@ -28,7 +28,7 @@ final class FullScreenPreview {
     @ObservationIgnored private let onChooseScreen: (NSScreen) -> Void
     @ObservationIgnored private var screenObserver: (any NSObjectProtocol)?
 
-    init(tab: TabModel, screen: NSScreen, onChooseScreen: @escaping (NSScreen) -> Void, onClose: @escaping () -> Void) {
+    init(tab: TabModel, screen: NSScreen, onChooseScreen: @escaping (NSScreen) -> Void, onToggleLUT: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.screen = screen
         self.onChooseScreen = onChooseScreen
         window = FullScreenPreviewWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
@@ -39,7 +39,7 @@ final class FullScreenPreview {
         window.hidesOnDeactivate = true
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenAuxiliary, .moveToActiveSpace]
-        let host = NSHostingView(rootView: FullScreenPreviewView(tab: tab, preview: self, onClose: onClose))
+        let host = NSHostingView(rootView: FullScreenPreviewView(tab: tab, preview: self, onToggleLUT: onToggleLUT, onClose: onClose))
         host.sizingOptions = []
         window.contentView = host
         screenObserver = NotificationCenter.default.addObserver(
@@ -84,20 +84,24 @@ private struct FullScreenPreviewView: View {
 
     let tab: TabModel
     let preview: FullScreenPreview
+    let onToggleLUT: () -> Void
     let onClose: () -> Void
 
+    @State private var gamma: LogGamma?
     @State private var picture: NSImage?
     @State private var media: MediaInfo?
     @State private var controlsVisible = true
     @State private var activity = 0
     @State private var isOverControls = false
 
-    init(tab: TabModel, preview: FullScreenPreview, onClose: @escaping () -> Void) {
+    init(tab: TabModel, preview: FullScreenPreview, onToggleLUT: @escaping () -> Void, onClose: @escaping () -> Void) {
         self.tab = tab
         self.preview = preview
+        self.onToggleLUT = onToggleLUT
         self.onClose = onClose
         // The inspector's image shows at once, so full screen never opens on black.
-        if tab.selection.count == 1 {
+        // With a LUT in use it stays black for a moment instead, so the picture doesn't change color.
+        if tab.selection.count == 1, !(tab.selection[0].isVideo && PreviewLUTs.shared.isEnabled) {
             let item = tab.selection[0]
             _picture = State(initialValue: ThumbnailCache.shared.cached(item.url, modified: item.modified, size: InspectorPreview.posterSize))
         }
@@ -170,6 +174,8 @@ private struct FullScreenPreviewView: View {
                     frameRate: media?.frameRate,
                     isFullScreen: true,
                     marks: tab.trimMarks[item.id],
+                    gamma: gamma,
+                    onToggleLUT: onToggleLUT,
                     onFullScreen: onClose
                 )
             }
@@ -212,9 +218,14 @@ private struct FullScreenPreviewView: View {
 
     private func loadDetails() async {
         guard let item else { return }
-        picture = ThumbnailCache.shared.cached(item.url, modified: item.modified, size: InspectorPreview.posterSize)
+        picture = item.isVideo && PreviewLUTs.shared.isEnabled ? nil : ThumbnailCache.shared.cached(item.url, modified: item.modified, size: InspectorPreview.posterSize)
         media = nil
+        gamma = nil
         if item.isPlayable {
+            let url = item.url
+            if item.isVideo {
+                gamma = await Task.detached(priority: .utility) { await LogFootage.gamma(of: url) }.value
+            }
             media = await MediaInfoReader.read(item.url)
         } else {
             let side = max(preview.screen.frame.width, preview.screen.frame.height)

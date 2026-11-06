@@ -33,6 +33,11 @@ nonisolated struct FolderSection: Identifiable, Hashable, Sendable {
         return isNumbered && SectionBuilder.defaultExpandedKeys.contains(preferenceKey)
     }
 
+    /// Pictures read better as a grid, and everything else starts as a list.
+    var startsAsGrid: Bool {
+        SectionBuilder.gridKeys.contains(preferenceKey)
+    }
+
     /// More items earn more height, within limits, but footage always gets the most.
     func defaultWeight(itemCount: Int?) -> Double {
         if preferenceKey == SectionBuilder.footageKey { return SectionBuilder.footageWeight }
@@ -55,7 +60,10 @@ nonisolated struct FolderSection: Identifiable, Hashable, Sendable {
 nonisolated enum SectionBuilder {
     static let looseFilesTitle = "Files"
     static let defaultExpandedKeys: Set<String> = ["output", "video", "cover"]
+    static let gridKeys: Set<String> = ["cover", "picture", "pictures", "photo", "photos"]
     static let footageKey = "video"
+    /// A single browser has no section name, so all of them share one set of view options.
+    static let singleBrowserKey = "__single"
     static let weightItemLimit = 24
     /// Above the largest weight item count can reach, which is 5.8.
     static let footageWeight = 8.0

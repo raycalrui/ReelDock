@@ -48,7 +48,7 @@ struct ImportPanelView: View {
 
     private func header(_ card: CameraCard) -> some View {
         HStack(spacing: 10) {
-            Image(systemName: "sdcard")
+            Image(systemName: card.isFolderSource ? "iphone" : "sdcard")
                 .foregroundStyle(.secondary)
             if app.cards.cards.count > 1 {
                 Picker("Card", selection: cardBinding) {
@@ -64,19 +64,29 @@ struct ImportPanelView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 0)
-            Button {
-                app.eject(card, from: controller)
-            } label: {
-                if app.ejectingCardIDs.contains(card.id) {
-                    HStack(spacing: 6) {
-                        ProgressView().controlSize(.small)
-                        Text("Ejecting…")
-                    }
-                } else {
-                    Label("Eject", systemImage: "eject.fill")
+            if card.isFolderSource {
+                let imported = importedClips(card)
+                Button("Move Imported to Trash") {
+                    controller?.promptTrashImportedClips(clipsWithCopyOnDisk(imported).map(\.url), from: card.volumeName)
                 }
+                .fixedSize()
+                .disabled(imported.isEmpty)
+                .help("Clips stay here after an import. This moves the ones that have a copy elsewhere to the Trash.")
+            } else {
+                Button {
+                    app.eject(card, from: controller)
+                } label: {
+                    if app.ejectingCardIDs.contains(card.id) {
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Ejecting…")
+                        }
+                    } else {
+                        Label("Eject", systemImage: "eject.fill")
+                    }
+                }
+                .disabled(app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id))
             }
-            .disabled(app.queue.isActive(cardID: card.id) || app.ejectingCardIDs.contains(card.id))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -91,6 +101,23 @@ struct ImportPanelView: View {
                 syncSelection()
             }
         )
+    }
+
+    /// Only a copy found on disk counts, and not a record of one that has since gone.
+    private func importedClips(_ card: CameraCard) -> [CardClip] {
+        card.clips.filter { clip in
+            app.queue.activeJob(clipID: clip.id) == nil
+                && app.cards.presence[clip.id]?.existingPaths.contains { $0 != clip.url.path } == true
+        }
+    }
+
+    /// Checked again at the last moment, since a copy can have gone since the panel last looked.
+    private func clipsWithCopyOnDisk(_ clips: [CardClip]) -> [CardClip] {
+        clips.filter { clip in
+            app.cards.presence[clip.id]?.existingPaths.contains {
+                $0 != clip.url.path && FileManager.default.fileExists(atPath: $0)
+            } == true
+        }
     }
 
     private func cardSummary(_ card: CameraCard) -> String {
@@ -181,7 +208,7 @@ struct ImportPanelView: View {
             .labelsHidden()
             .disabled(isBusy)
 
-            ClipThumbnail(url: clip.thumbnailURL)
+            ClipThumbnail(url: clip.thumbnailURL, clipURL: clip.url)
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 8) {
@@ -358,7 +385,8 @@ struct ImportPanelView: View {
         app.cards.presence[clip.id]?.status(
             currentFolder: tab.folder,
             projectRoot: app.projectRootURL,
-            mediaRoot: app.mediaRootURL
+            mediaRoot: app.mediaRootURL,
+            archiveRoot: app.projectArchiveURL
         ) ?? .new
     }
 
@@ -440,9 +468,10 @@ enum ImportFormat {
     }
 }
 
-/// Uses the thumbnail the camera already wrote to the card, so listing never decodes video.
+/// Uses the thumbnail the camera already wrote, so listing never decodes video.
 fileprivate struct ClipThumbnail: View {
     let url: URL?
+    let clipURL: URL
 
     private static let cache = NSCache<NSString, NSImage>()
 
@@ -460,14 +489,16 @@ fileprivate struct ClipThumbnail: View {
         }
         .frame(width: 80, height: 45)
         .clipShape(RoundedRectangle(cornerRadius: 4))
-        .task(id: url) {
-            guard let url else { return }
-            let key = url.path as NSString
+        .task(id: clipURL) {
+            let key = clipURL.path as NSString
             if let cached = Self.cache.object(forKey: key) {
                 image = cached
                 return
             }
-            let data = await Task.detached(priority: .utility) { try? Data(contentsOf: url) }.value
+            let data = await Task.detached(priority: .utility) { [url, clipURL] in
+                if let url { return try? Data(contentsOf: url) }
+                return BlackmagicClipInfo.thumbnail(of: clipURL)
+            }.value
             guard let data, let loaded = NSImage(data: data) else { return }
             Self.cache.setObject(loaded, forKey: key)
             image = loaded
@@ -621,7 +652,7 @@ struct ImportActivityView: View {
     /// Cards this queue read from, offered once nothing is copying from them.
     private var ejectableCards: [CameraCard] {
         let used = Set(queue.jobs.map(\.cardID))
-        return app.cards.cards.filter { used.contains($0.id) && !queue.isActive(cardID: $0.id) }
+        return app.cards.cards.filter { !$0.isFolderSource && used.contains($0.id) && !queue.isActive(cardID: $0.id) }
     }
 
     private func isStopped(_ state: ImportQueue.JobState) -> Bool {
@@ -634,7 +665,7 @@ struct ImportActivityView: View {
     private func detail(_ job: ImportQueue.Job) -> String? {
         switch job.state {
         case let .failed(reason): reason
-        case let .done(path): ClipPresence.placeName(path: path, projectRoot: app.projectRootURL, mediaRoot: app.mediaRootURL)
+        case let .done(path): ClipPresence.placeName(path: path, projectRoot: app.projectRootURL, mediaRoot: app.mediaRootURL, archiveRoot: app.projectArchiveURL)
         case .verifying: "Verifying"
         case .cancelled: "Cancelled"
         case .queued, .copying: nil

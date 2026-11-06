@@ -85,13 +85,29 @@ enum MainMenu {
             item("As Sections", #selector(WorkspaceWindowController.showSections(_:)), "1"),
             item("As Single Browser", #selector(WorkspaceWindowController.showSingleBrowser(_:)), "2"),
             .separator(),
+            sortItems(),
+            item("Show as Grid", #selector(WorkspaceWindowController.toggleGrid(_:)), "3"),
             item("Show Hidden Files", #selector(WorkspaceWindowController.toggleHiddenFiles(_:)), ".", [.command, .shift]),
+            .separator(),
+            item("Preview with LUT", #selector(WorkspaceWindowController.togglePreviewLUT(_:)), "l", [.command, .shift]),
             .separator(),
             item("Toggle Sidebar", #selector(NSSplitViewController.toggleSidebar(_:)), "s", [.command, .control]),
             item("Toggle Inspector", #selector(NSSplitViewController.toggleInspector(_:)), "i", [.command, .option]),
             .separator(),
             item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
         ]
+    }
+
+    private static func sortItems() -> NSMenuItem {
+        var items = FileSortKey.allCases.enumerated().map { index, key in
+            let sort = item(key.title, #selector(WorkspaceWindowController.sortByKey(_:)))
+            sort.tag = index
+            return sort
+        }
+        items.append(.separator())
+        items.append(item("Ascending", #selector(WorkspaceWindowController.sortAscending(_:))))
+        items.append(item("Descending", #selector(WorkspaceWindowController.sortDescending(_:))))
+        return submenu("Sort By", items)
     }
 
     private static func toolItems() -> [NSMenuItem] {

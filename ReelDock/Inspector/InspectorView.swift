@@ -76,6 +76,7 @@ private struct SingleItemInspector: View {
     @State private var media: MediaInfo?
     @State private var folderCount: Int?
     @State private var waveform: [Float]?
+    @State private var gamma: LogGamma?
 
     var body: some View {
         GeometryReader { proxy in
@@ -93,7 +94,9 @@ private struct SingleItemInspector: View {
                         frameRate: media?.frameRate,
                         isFullScreen: false,
                         canGoFullScreen: item.canPreviewFullScreen,
-                        marks: tab.trimMarks[item.id]
+                        marks: tab.trimMarks[item.id],
+                        gamma: gamma,
+                        onToggleLUT: { controller?.togglePreviewLUT(nil) }
                     ) { controller?.toggleFullScreenPreview() }
                 }
                 if canEditVideo {
@@ -105,7 +108,7 @@ private struct SingleItemInspector: View {
                     TagRow(controller: controller, items: [item])
                 }
                 if item.isVideo, let duration = media?.duration, duration > 0 {
-                    FrameGrid(url: item.url, modified: item.modified, duration: duration, aspect: aspect, playback: playback)
+                    FrameGrid(url: item.url, modified: item.modified, duration: duration, aspect: aspect, playback: playback, lutGeneration: PreviewLUTs.shared.generation)
                 } else {
                     Spacer(minLength: 0)
                 }
@@ -116,6 +119,7 @@ private struct SingleItemInspector: View {
         .clipped()
         // The date too, so a saved edit shows up.
         .task(id: "\(item.id)|\(item.modified?.timeIntervalSince1970 ?? 0)") { await loadDetails() }
+        .task(id: "\(item.id)|\(item.modified?.timeIntervalSince1970 ?? 0)|\(PreviewLUTs.shared.generation)") { await loadPoster() }
     }
 
     private var canEditTags: Bool { !FileOperations.isOnCameraCard(item.url) }
@@ -235,6 +239,7 @@ private struct SingleItemInspector: View {
         if let width = media.width, let height = media.height { parts.append("\(width) × \(height)") }
         if let rate = media.frameRate { parts.append(InspectorFormat.frameRate(rate)) }
         if let codec = media.codec { parts.append(codec) }
+        if let gamma { parts.append(gamma.rawValue) }
         if let channels = media.audioChannels, let rate = media.audioSampleRate {
             parts.append("\(channels) ch, \(Int(rate / 1000)) kHz")
         }
@@ -269,12 +274,25 @@ private struct SingleItemInspector: View {
         }
     }
 
-    private func loadDetails() async {
+    /// With a LUT in use, the picture before playback starts has it too, so nothing changes color on the first play.
+    private func loadPoster() async {
+        guard item.hasVisualThumbnail else { return }
         let scale = NSScreen.main?.backingScaleFactor ?? 2
-        if item.hasVisualThumbnail {
-            ThumbnailCache.shared.request(item.url, modified: item.modified, size: InspectorPreview.posterSize, scale: scale) { image in
-                poster = image
-            }
+        if item.isVideo, let grade = await PreviewLUTs.shared.grade(forClipAt: item.url),
+           let graded = await ThumbnailCache.shared.gradedFirstFrame(of: item.url, modified: item.modified, size: InspectorPreview.posterSize, scale: scale, grade: grade) {
+            if !Task.isCancelled { poster = graded }
+            return
+        }
+        guard !Task.isCancelled else { return }
+        ThumbnailCache.shared.request(item.url, modified: item.modified, size: InspectorPreview.posterSize, scale: scale) { image in
+            poster = image
+        }
+    }
+
+    private func loadDetails() async {
+        if item.isVideo {
+            let url = item.url
+            gamma = await Task.detached(priority: .utility) { await LogFootage.gamma(of: url) }.value
         }
         if item.isFolder {
             let url = item.url
@@ -401,6 +419,28 @@ struct FullScreenButton: View {
     }
 }
 
+/// Lit when this clip is showing through a LUT.
+private struct LUTButton: View {
+    let gamma: LogGamma
+    let action: () -> Void
+
+    private var isShowing: Bool {
+        PreviewLUTs.shared.isEnabled && PreviewLUTs.shared.paths[gamma] != nil
+    }
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "camera.filters")
+                .foregroundStyle(isShowing ? Color.accentColor : Color.primary)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Preview with LUT")
+        .help(isShowing ? "\(gamma.rawValue) with its LUT. G shows it as shot." : "\(gamma.rawValue) as shot. G shows it with a LUT.")
+    }
+}
+
 struct TransportBar: View {
     let playback: PlaybackController
     let duration: Double
@@ -408,6 +448,9 @@ struct TransportBar: View {
     let isFullScreen: Bool
     var canGoFullScreen = true
     var marks: TrimMarks?
+    /// Set for log footage, which is what a preview LUT is for.
+    var gamma: LogGamma?
+    var onToggleLUT: (() -> Void)?
     let onFullScreen: () -> Void
 
     var body: some View {
@@ -428,6 +471,9 @@ struct TransportBar: View {
             Text(Timecode.format(duration, frameRate: frameRate))
                 .font(.system(size: 11).monospacedDigit())
                 .foregroundStyle(.secondary)
+            if let gamma, let onToggleLUT {
+                LUTButton(gamma: gamma, action: onToggleLUT)
+            }
             if canGoFullScreen {
                 FullScreenButton(isFullScreen: isFullScreen, action: onFullScreen)
                     .foregroundStyle(Color.primary)
@@ -525,6 +571,7 @@ private struct FrameGrid: View {
     let duration: Double
     let aspect: CGFloat
     let playback: PlaybackController
+    let lutGeneration: Int
 
     @State private var images: [Int: NSImage] = [:]
 
@@ -545,7 +592,7 @@ private struct FrameGrid: View {
                     PlayheadOutline(playback: playback, duration: duration, layout: layout)
                 }
             }
-            .task(id: "\(url.path)|\(layout.count)|\(modified?.timeIntervalSince1970 ?? 0)") { await load(count: layout.count) }
+            .task(id: "\(url.path)|\(layout.count)|\(modified?.timeIntervalSince1970 ?? 0)|\(lutGeneration)") { await load(count: layout.count) }
         }
     }
 
@@ -577,8 +624,13 @@ private struct FrameGrid: View {
         try? await Task.sleep(for: .milliseconds(250))
         guard !Task.isCancelled else { return }
 
-        let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
         generator.appliesPreferredTrackTransform = true
+        if let grade = await PreviewLUTs.shared.grade(forClipAt: url) {
+            generator.videoComposition = await grade.composition(for: asset)
+        }
+        guard !Task.isCancelled else { return }
         generator.maximumSize = CGSize(width: 480, height: 480)
         // Any frame near the target will do, and allowing that avoids decoding from the last keyframe.
         let tolerance = CMTime(seconds: duration / Double(count) / 2, preferredTimescale: 600)

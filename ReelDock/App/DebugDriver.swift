@@ -1,4 +1,5 @@
 #if DEBUG
+import AVFoundation
 import AppKit
 
 /// Debug-only test driver. Set REELDOCK_DEBUG_DIR, then write commands to `command.txt` there.
@@ -399,6 +400,179 @@ final class DebugDriver {
             var frames: [String] = []
             if let frame = controller.window?.contentView?.superview { walk(frame, &frames) }
             return frames.joined(separator: " ")
+        case "sort":
+            // sort|section|name, date, size, or kind|asc or desc. Single-browser mode uses "single" for the section.
+            guard let browser = content.debugBrowser(parts[1]), let key = FileSortKey(rawValue: parts[2]) else { return "not found" }
+            browser.setSort(FileSort(key: key, descending: parts[safe: 3] == "desc"))
+        case "order":
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[safe: 2] ?? "0") ?? 0] else { return "not found" }
+            return column.items.map(\.name).joined(separator: ", ")
+        case "grid":
+            guard let browser = content.debugBrowser(parts[1]) else { return "not found" }
+            browser.setGrid(parts[safe: 2] != "off")
+            return "isGrid=\(browser.isGrid) columns=\(browser.columns.map { $0.grid != nil })"
+        case "gridstate":
+            guard let browser = content.debugBrowser(parts[1]), let column = browser.columns[safe: Int(parts[safe: 2] ?? "0") ?? 0], let grid = column.grid else { return "no grid" }
+            grid.layoutSubtreeIfNeeded()
+            let tiles = grid.visibleItems().count
+            let frame = grid.item(at: IndexPath(item: 0, section: 0))?.view.frame ?? .zero
+            return "tiles=\(tiles) items=\(column.items.count) selected=\(column.selectedItems.map(\.name)) firstFrame=\(frame) gridSize=\(grid.frame.size) focused=\(controller.window?.firstResponder === grid) preference=\(app.settings.sections.mapValues { "\($0.isGrid.map(String.init) ?? "nil") \($0.sort?.key.rawValue ?? "nil")" })"
+        case "gridselect":
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0], column.grid != nil, let row = Int(parts[3]) else { return "no grid" }
+            controller.window?.makeFirstResponder(column.focusView)
+            column.selectRows(IndexSet(integer: row))
+            return "selected=\(column.selectedItems.map(\.name)) inspector=\(controller.tab.selection.map(\.name))"
+        case "gridkey":
+            // gridkey|section|column|keyCode
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0], let grid = column.grid, let code = UInt16(parts[3]) else { return "no grid" }
+            controller.window?.makeFirstResponder(grid)
+            if let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: controller.window?.windowNumber ?? 0, context: nil, characters: "", charactersIgnoringModifiers: "", isARepeat: false, keyCode: code) {
+                grid.keyDown(with: event)
+            }
+            return "selected=\(column.selectedItems.map(\.name)) columns=\(content.debugBrowser(parts[1])?.columns.map(\.folderURL.lastPathComponent) ?? [])"
+        case "gridrename":
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0], let item = column.selectedItems.first else { return "no selection" }
+            column.beginRename(of: item.url)
+            guard let field = controller.window?.firstResponder as? NSTextView, let editing = field.delegate as? NSTextField else { return "not editing" }
+            if parts.count > 3 {
+                editing.stringValue = parts[3]
+                controller.window?.makeFirstResponder(column.focusView)
+            }
+        case "browsersnapshot":
+            // browsersnapshot|section|path
+            guard let browser = content.debugBrowser(parts[1]) else { return "not found" }
+            guard let rep = browser.bitmapImageRepForCachingDisplay(in: browser.bounds) else { return "no image" }
+            browser.cacheDisplay(in: browser.bounds, to: rep)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[2]))
+            return "size=\(browser.bounds.size)"
+        case "lut":
+            // lut|set|S-Log3|path, lut|clear|S-Log3, lut|on, lut|off, or lut alone for its state.
+            let luts = PreviewLUTs.shared
+            switch parts[safe: 1] {
+            case "set":
+                guard let gamma = LogGamma(rawValue: parts[2]) else { return "bad gamma" }
+                let url = URL(fileURLWithPath: parts[3])
+                Task { try? await luts.choose(url, for: gamma) }
+            case "clear":
+                if let gamma = LogGamma(rawValue: parts[2]) { luts.clear(gamma) }
+            case "on": luts.setEnabled(true)
+            case "off": luts.setEnabled(false)
+            case "toggle": controller.togglePreviewLUT(nil)
+            default: break
+            }
+            let item = controller.tab.playback.player.currentItem
+            return "enabled=\(luts.isEnabled) paths=\(luts.paths.map { "\($0.rawValue)=\(($1 as NSString).lastPathComponent)" }) composition=\(item?.videoComposition != nil) frames=\(debugGradedFrames.value) saved=\(app.settings.usesPreviewLUTs)/\(app.settings.previewLUTs.count) sheet=\(controller.window?.attachedSheet != nil)"
+        case "lutgamma":
+            // Reads in the background, so asking twice reports it.
+            let url = URL(fileURLWithPath: parts[1])
+            Task { _ = await LogFootage.gamma(of: url) }
+            return String(describing: LogFootage.knownGamma(of: url))
+        case "lutframe":
+            // lutframe|clip|out.png: writes the first frame as the inspector would draw it through the current LUT.
+            let url = URL(fileURLWithPath: parts[1])
+            let output = URL(fileURLWithPath: parts[2])
+            Task {
+                guard let grade = await PreviewLUTs.shared.grade(forClipAt: url),
+                      let image = await ThumbnailCache.shared.gradedFirstFrame(of: url, modified: nil, size: 1920, scale: 1, grade: grade),
+                      let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else {
+                    try? "failed".write(to: output, atomically: true, encoding: .utf8)
+                    return
+                }
+                try? rep.representation(using: .png, properties: [:])?.write(to: output)
+            }
+        case "trashimported":
+            guard let card = app.cards.cards.first(where: \.isFolderSource) else { return "no source" }
+            let urls = card.clips.filter { clip in app.cards.presence[clip.id]?.existingPaths.contains { $0 != clip.url.path } == true }.map(\.url)
+            controller.promptTrashImportedClips(urls, from: card.volumeName)
+            return "clips=\(urls.map(\.lastPathComponent)) sheet=\(controller.window?.attachedSheet?.contentView?.debugTextFields.map(\.stringValue) ?? [])"
+        case "wincap":
+            // wincap|path|x|y: captures this app's window as the screen shows it, then reports the pixel at a point in window coordinates (top left).
+            typealias Capture = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+            guard let window = controller.window,
+                  let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImage") else { return "no symbol" }
+            let capture = unsafeBitCast(symbol, to: Capture.self)
+            // Including only this window, ignoring its frame, at its best resolution.
+            guard let image = capture(.null, 1 << 3, UInt32(window.windowNumber), (1 << 0) | (1 << 3))?.takeRetainedValue() else { return "no image" }
+            let rep = NSBitmapImageRep(cgImage: image)
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: parts[1]))
+            let scale = CGFloat(image.width) / window.frame.width
+            var samples: [String] = []
+            for pair in Array(parts.dropFirst(2)).chunked(2) {
+                guard let x = Double(pair[0]), let y = Double(pair[1]) else { continue }
+                let color = rep.colorAt(x: Int(x * scale), y: Int(y * scale))
+                samples.append("(\(Int(x)),\(Int(y)))=" + (color.map { "r\(Int($0.redComponent * 255)) g\(Int($0.greenComponent * 255)) b\(Int($0.blueComponent * 255))" } ?? "nil"))
+            }
+            return "\(image.width)x\(image.height) space=\(image.colorSpace?.name.map { "\($0)" } ?? "nil") \(samples.joined(separator: " "))"
+        case "previewframe":
+            // Where the inspector's picture is, in window coordinates from the top left.
+            guard let window = controller.window, let content = window.contentView else { return "no window" }
+            func find(_ view: NSView) -> NSView? {
+                if view is PlayerSurfaceView { return view }
+                return view.subviews.lazy.compactMap(find).first
+            }
+            guard let surface = find(content) else { return "no player surface" }
+            let frame = surface.convert(surface.bounds, to: nil)
+            return "x=\(Int(frame.minX)) y=\(Int(window.frame.height - frame.maxY)) w=\(Int(frame.width)) h=\(Int(frame.height))"
+        case "windowid":
+            return "id=\(controller.window?.windowNumber ?? 0) screen=\(controller.window?.screen?.colorSpace?.localizedName ?? "nil") edr=\(controller.window?.screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 0)"
+        case "lutdiag":
+            // lutdiag|clip|out.txt: what the poster and the player each get for the same frame.
+            let url = URL(fileURLWithPath: parts[1])
+            let output = URL(fileURLWithPath: parts[2])
+            let playback = controller.tab.playback
+            Task {
+                var lines: [String] = []
+                func describe(_ buffer: CVPixelBuffer) -> String {
+                    let attached = CVBufferCopyAttachments(buffer, .shouldPropagate) as? [String: Any] ?? [:]
+                    let tags = ["CVImageBufferColorPrimaries", "CVImageBufferTransferFunction", "CVImageBufferYCbCrMatrix", "CVImageBufferGammaLevel", "CVImageBufferCGColorSpace"]
+                        .map { "\($0.replacingOccurrences(of: "CVImageBuffer", with: ""))=\(attached[$0].map { "\($0)" } ?? "-")" }.joined(separator: " ")
+                    let space = CVImageBufferCreateColorSpaceFromAttachments(attached as CFDictionary)?.takeRetainedValue()
+                    CVPixelBufferLockBaseAddress(buffer, .readOnly)
+                    defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+                    var pixel = "n/a"
+                    if CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_32BGRA, let base = CVPixelBufferGetBaseAddress(buffer) {
+                        let row = base.advanced(by: CVPixelBufferGetBytesPerRow(buffer) * CVPixelBufferGetHeight(buffer) / 2).assumingMemoryBound(to: UInt8.self)
+                        let at = CVPixelBufferGetWidth(buffer) / 2 * 4
+                        pixel = "b\(row[at]) g\(row[at + 1]) r\(row[at + 2])"
+                    }
+                    return "\(CVPixelBufferGetWidth(buffer))x\(CVPixelBufferGetHeight(buffer)) center=\(pixel) \(tags) spaceFromAttachments=\(space?.name.map { "\($0)" } ?? String(describing: space))"
+                }
+                if let grade = await PreviewLUTs.shared.grade(forClipAt: url) {
+                    let asset = AVURLAsset(url: url)
+                    let generator = AVAssetImageGenerator(asset: asset)
+                    generator.videoComposition = await grade.composition(for: asset)
+                    generator.requestedTimeToleranceBefore = .zero
+                    generator.requestedTimeToleranceAfter = .zero
+                    if let image = try? await generator.image(at: .zero).image {
+                        let rep = NSBitmapImageRep(cgImage: image)
+                        lines.append("poster cgimage space=\(image.colorSpace?.name.map { "\($0)" } ?? "nil") \(image.width)x\(image.height) bitsPerComponent=\(image.bitsPerComponent) center=\(rep.colorAt(x: image.width / 2, y: image.height / 2).map { "r\(Int($0.redComponent * 255)) g\(Int($0.greenComponent * 255)) b\(Int($0.blueComponent * 255))" } ?? "nil")")
+                    }
+                }
+                if let item = playback.player.currentItem {
+                    let videoOutput = AVPlayerItemVideoOutput(pixelBufferAttributes: nil)
+                    item.add(videoOutput)
+                    playback.seek(to: 0)
+                    try? await Task.sleep(for: .seconds(1))
+                    let time = videoOutput.itemTime(forHostTime: CACurrentMediaTime())
+                    if let buffer = videoOutput.copyPixelBuffer(forItemTime: time, itemTimeForDisplay: nil) {
+                        lines.append("player buffer \(describe(buffer))")
+                    } else {
+                        lines.append("player buffer none, composition=\(item.videoComposition != nil)")
+                    }
+                    lines.append("composition colors primaries=\(item.videoComposition?.colorPrimaries ?? "-") transfer=\(item.videoComposition?.colorTransferFunction ?? "-") matrix=\(item.videoComposition?.colorYCbCrMatrix ?? "-")")
+                    item.remove(videoOutput)
+                }
+                try? lines.joined(separator: "\n").write(to: output, atomically: true, encoding: .utf8)
+            }
+        case "setarchive":
+            app.debugSetProjectArchive(parts[1])
+        case "archiveprompt":
+            guard let project = app.projects.first(where: { $0.title == parts[1] }) else { return "not found" }
+            let menu = controller.folderContextMenu(for: project.url)
+            guard let index = menu.items.firstIndex(where: { $0.title == "Archive to External Drive…" }) else { return "no menu item" }
+            menu.performActionForItem(at: index)
+            let sheet = controller.window?.attachedSheet
+            return "sheet=\(sheet.map { $0.contentView?.debugTextFields.map(\.stringValue) ?? [] } ?? []) buttons=\(sheet?.contentView?.debugButtons.map(\.title) ?? [])"
         case "importhighlight":
             let clips = app.cards.cards.flatMap(\.clips).filter { $0.name == parts[1] }
             content.importModel.highlighted = Set(clips.map(\.id))
@@ -451,12 +625,12 @@ final class DebugDriver {
         case "cards":
             var lines = ["ready=\(app.cards.isPresenceReady) panel=\(controller.tab.isImportPanelVisible) checked=\(content.importModel.checked.count)"]
             for card in app.cards.cards {
-                lines.append("card \(card.volumeName) model=\(card.cameraModel ?? "nil") device=\(card.deviceFolder ?? "nil") new=\(app.cards.newClipCount(in: card))")
+                lines.append("card \(card.volumeName) folderSource=\(card.isFolderSource) model=\(card.cameraModel ?? "nil") device=\(card.deviceFolder ?? "nil") new=\(app.cards.newClipCount(in: card))")
                 for group in ClipGrouping.groups(card.clips) {
                     lines.append(" group \(group.title) clips=\(group.clips.count)")
                     for clip in group.clips {
-                        let status = app.cards.presence[clip.id]?.status(currentFolder: controller.tab.folder, projectRoot: app.projectRootURL, mediaRoot: app.mediaRootURL)
-                        lines.append("  \(clip.name) \(ImportFormat.details(clip)) status=\(String(describing: status))")
+                        let status = app.cards.presence[clip.id]?.status(currentFolder: controller.tab.folder, projectRoot: app.projectRootURL, mediaRoot: app.mediaRootURL, archiveRoot: app.projectArchiveURL)
+                        lines.append("  \(clip.name) \(ImportFormat.details(clip)) device=\(clip.deviceFolder ?? "nil") status=\(String(describing: status))")
                     }
                 }
             }
@@ -614,12 +788,13 @@ final class DebugDriver {
             return browser.debugScrollState
         case "playkey":
             // playkey|space, j, k, l|down or up: goes through the same path as a real key.
-            let codes: [String: UInt16] = ["space": 49, "j": 38, "k": 40, "l": 37, "f": 3, "p": 35, "esc": 53, "down": 125]
+            let codes: [String: UInt16] = ["space": 49, "j": 38, "k": 40, "l": 37, "f": 3, "p": 35, "esc": 53, "down": 125, "up": 126, "left": 123, "right": 124]
+            let arrowCharacters = ["up": "\u{F700}", "down": "\u{F701}", "left": "\u{F702}", "right": "\u{F703}"]
             guard let code = codes[parts[1]], let window = controller.window,
                   let event = NSEvent.keyEvent(
                     with: parts[safe: 2] == "up" ? .keyUp : .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
                     windowNumber: (NSApp.windows.first { $0.isVisible && $0.level == .statusBar } ?? window).windowNumber, context: nil,
-                    characters: parts[1] == "down" ? "\u{F701}" : "", charactersIgnoringModifiers: parts[1] == "down" ? "\u{F701}" : "", isARepeat: false, keyCode: code
+                    characters: arrowCharacters[parts[1]] ?? "", charactersIgnoringModifiers: arrowCharacters[parts[1]] ?? "", isARepeat: false, keyCode: code
                   ) else { return "not found" }
             return "handled=\(controller.handleShortcutKey(event)) responder=\(window.firstResponder.map { NSStringFromClass(type(of: $0)) } ?? "nil")"
         case "playstate":
@@ -880,6 +1055,10 @@ final class DebugDriver {
 }
 
 private extension Array {
+    func chunked(_ size: Int) -> [[Element]] {
+        stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
+    }
+
     subscript(safe index: Int) -> Element? {
         indices.contains(index) ? self[index] : nil
     }
