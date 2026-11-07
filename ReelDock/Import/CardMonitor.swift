@@ -133,6 +133,8 @@ final class CardMonitor {
 enum CardSound: String {
     case inserted = "Submarine"
     case ejected = "Glass"
+    case imported = "Hero"
+    case importFailed = "Basso"
 
     func play() {
         let sound = NSSound(named: rawValue)

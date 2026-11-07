@@ -215,6 +215,7 @@ Into [3 video ▾]
 - Clips are grouped by day, then split when the gap between clips exceeds 60 minutes. A group's checkbox selects the whole group.
 - Groups and the clips within them run oldest to newest. Clips with no date come last.
 - Space plays a clip in the inspector. Previews show the source as shot, so S-Log3 looks flat.
+- Up and Down move from clip to clip in the order listed, passing over each day's header, and Shift extends the highlight. Return checks the highlighted clips, or unchecks them if they're all checked, and leaves clips being copied alone.
 - The panel opens by itself in the front window when a card is inserted or already present at launch, and closes when the last card leaves. The card button closes it, as does `Esc`. With no card, the button is disabled.
 - Every new clip starts selected, so importing a whole card is one click. A group's checkbox and "Select New" never pick clips that are already imported.
 - The panel stays open after an import, and the remaining new clips become the selection, so they can go to another project or the archive with one more click.
@@ -263,7 +264,7 @@ Clips are copied one at a time because parallel reads from one card add seeking 
 
 **Background work:** copying continues while using any tab. A toolbar item shows progress, speed, and time remaining, with pause and cancel.
 
-**When finished:** show a summary with an **Eject** button. Never eject automatically, and refuse to eject while a copy from that card is running.
+**When finished:** play the system's Hero sound once everything queued is done, or Basso if any clip failed. A cancelled batch stays quiet. Show a summary with an **Eject** button. Never eject automatically, and refuse to eject while a copy from that card is running.
 
 **Ejecting:** the app stays usable while a card ejects. The button and the sidebar row show a spinner, and importing from that card is unavailable. A sound plays once the card is safe to remove. If the card stays busy, an alert explains why and no sound plays.
 

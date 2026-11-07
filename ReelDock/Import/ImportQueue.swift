@@ -63,6 +63,8 @@ final class ImportQueue {
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var lastTick: (date: Date, bytes: Int64)?
     @ObservationIgnored private var keepAwake: (any NSObjectProtocol)?
+    /// A batch that was cancelled ends quietly.
+    @ObservationIgnored private var wasCancelled = false
 
     init(ledger: ImportLedger, registry: PartFileRegistry, cards: CardMonitor) {
         self.ledger = ledger
@@ -133,7 +135,12 @@ final class ImportQueue {
     // MARK: Control
 
     func enqueue(_ clips: [CardClip], cardID: String, destination: (CardClip) -> ImportDestination) {
-        if !isActive { jobs.removeAll() }
+        // A pause belonged to the batch before, so a new one starts copying.
+        if !isActive {
+            jobs.removeAll()
+            wasCancelled = false
+            setPaused(false)
+        }
         for clip in clips where activeJob(clipID: clip.id) == nil {
             jobs.append(Job(clip: clip, cardID: cardID, destination: destination(clip)))
         }
@@ -148,6 +155,7 @@ final class ImportQueue {
     }
 
     func cancelAll() {
+        wasCancelled = true
         runners.values.forEach { $0.cancel() }
         for index in jobs.indices where jobs[index].state == .queued {
             jobs[index].state = .cancelled
@@ -155,6 +163,7 @@ final class ImportQueue {
     }
 
     func retryFailed() {
+        wasCancelled = false
         var cardIDs = Set<String>()
         for index in jobs.indices {
             if case .failed = jobs[index].state {
@@ -205,6 +214,17 @@ final class ImportQueue {
         if runners.isEmpty { endBackgroundWork() }
         tick()
         cards.refreshPresence()
+        if runners.isEmpty, !isActive { announceFinish() }
+    }
+
+    /// Once everything queued has finished, since a copy can run long enough to walk away from.
+    private func announceFinish() {
+        guard !wasCancelled else { return }
+        if failedCount > 0 {
+            CardSound.importFailed.play()
+        } else if doneCount > 0 {
+            CardSound.imported.play()
+        }
     }
 
     private func apply(_ outcome: Outcome, to job: Job, cardID: String) {

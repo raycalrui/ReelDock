@@ -582,6 +582,10 @@ final class DebugDriver {
                 return (view as? NSTableView) ?? view.subviews.lazy.compactMap(findTable).first
             }
             if let table = findTable(content.debugImportHost) { controller.window?.makeFirstResponder(table) }
+        case "importstate":
+            let model = content.importModel
+            let names = { (ids: Set<String>) in self.app.cards.cards.flatMap(\.clips).filter { ids.contains($0.id) }.map(\.name).sorted() }
+            return "highlighted=\(names(model.highlighted)) checked=\(names(model.checked)) scroll=\(model.scrollTarget.map { ($0 as NSString).lastPathComponent } ?? "nil") panelFocus=\(content.importPanelHasFocus) inspector=\(controller.tab.selection.map(\.name))"
         case "importcheck":
             // importcheck|none, importcheck|new, or importcheck|name,name
             let model = content.importModel
@@ -788,11 +792,12 @@ final class DebugDriver {
             return browser.debugScrollState
         case "playkey":
             // playkey|space, j, k, l|down or up: goes through the same path as a real key.
-            let codes: [String: UInt16] = ["space": 49, "j": 38, "k": 40, "l": 37, "f": 3, "p": 35, "esc": 53, "down": 125, "up": 126, "left": 123, "right": 124]
+            // A fourth part of "shift" holds Shift.
+            let codes: [String: UInt16] = ["return": 36, "space": 49, "j": 38, "k": 40, "l": 37, "f": 3, "p": 35, "esc": 53, "down": 125, "up": 126, "left": 123, "right": 124]
             let arrowCharacters = ["up": "\u{F700}", "down": "\u{F701}", "left": "\u{F702}", "right": "\u{F703}"]
             guard let code = codes[parts[1]], let window = controller.window,
                   let event = NSEvent.keyEvent(
-                    with: parts[safe: 2] == "up" ? .keyUp : .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+                    with: parts[safe: 2] == "up" ? .keyUp : .keyDown, location: .zero, modifierFlags: parts[safe: 3] == "shift" ? .shift : [], timestamp: 0,
                     windowNumber: (NSApp.windows.first { $0.isVisible && $0.level == .statusBar } ?? window).windowNumber, context: nil,
                     characters: arrowCharacters[parts[1]] ?? "", charactersIgnoringModifiers: arrowCharacters[parts[1]] ?? "", isARepeat: false, keyCode: code
                   ) else { return "not found" }

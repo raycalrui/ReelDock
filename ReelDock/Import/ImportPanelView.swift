@@ -12,6 +12,43 @@ final class ImportPanelModel {
     var subfolderOptions: [URL] = []
     /// While false, the selection follows "every new clip" as the status scan completes.
     var userEditedSelection = false
+    /// A row the keyboard moved to, for the list to bring into view.
+    var scrollTarget: String?
+    /// Where keyboard moves continue from, and where Shift extends from.
+    @ObservationIgnored private var focus: String?
+    @ObservationIgnored private var anchor: String?
+
+    /// Moves through the clips in the order they're listed, so the day headers between them aren't a stop.
+    func moveHighlight(by delta: Int, extending: Bool, order: [String]) {
+        guard !order.isEmpty else { return }
+        func position(_ id: String?) -> Int? {
+            id.flatMap { highlighted.contains($0) ? order.firstIndex(of: $0) : nil }
+        }
+        let selected = order.indices.filter { highlighted.contains(order[$0]) }
+        let current = position(focus) ?? (delta > 0 ? selected.last : selected.first)
+        let next = current.map { min(max($0 + delta, 0), order.count - 1) } ?? (delta > 0 ? 0 : order.count - 1)
+        if extending, let start = position(anchor) ?? current {
+            highlighted = Set(order[min(start, next)...max(start, next)])
+            anchor = order[start]
+        } else {
+            highlighted = [order[next]]
+            anchor = order[next]
+        }
+        focus = order[next]
+        scrollTarget = order[next]
+    }
+
+    /// Checks the highlighted clips, or unchecks them if they're all checked already. Clips being copied are left alone.
+    func toggleCheckedHighlighted(excluding busy: Set<String>) {
+        let targets = highlighted.subtracting(busy)
+        guard !targets.isEmpty else { return }
+        userEditedSelection = true
+        if targets.isSubset(of: checked) {
+            checked.subtract(targets)
+        } else {
+            checked.formUnion(targets)
+        }
+    }
 }
 
 struct ImportPanelView: View {
@@ -137,21 +174,36 @@ struct ImportPanelView: View {
         } else if groups.isEmpty {
             placeholder("Every clip on this card has been imported.")
         } else {
-            List(selection: Bindable(model).highlighted) {
-                ForEach(groups) { group in
-                    Section {
-                        ForEach(group.clips) { clip in
-                            row(clip)
-                                .tag(clip.id)
-                                .listRowSeparator(.hidden)
+            ScrollViewReader { proxy in
+                List(selection: Bindable(model).highlighted) {
+                    ForEach(groups) { group in
+                        Section {
+                            ForEach(group.clips) { clip in
+                                row(clip)
+                                    .tag(clip.id)
+                                    .id(clip.id)
+                                    .listRowSeparator(.hidden)
+                            }
+                        } header: {
+                            groupHeader(group)
                         }
-                    } header: {
-                        groupHeader(group)
                     }
                 }
+                .listStyle(.plain)
+                .onChange(of: model.scrollTarget) { _, target in
+                    if let target { proxy.scrollTo(target) }
+                }
             }
-            .listStyle(.plain)
         }
+    }
+
+    /// The clips in the order the list shows them.
+    static func listedClips(app: AppModel, model: ImportPanelModel) -> [CardClip] {
+        guard let card = app.cards.cards.first(where: { $0.id == model.cardID }) ?? app.cards.cards.first else { return [] }
+        let clips = model.hideImported
+            ? card.clips.filter { (app.cards.presence[$0.id]?.isNew ?? true) || app.queue.activeJob(clipID: $0.id) != nil }
+            : card.clips
+        return ClipGrouping.groups(clips).flatMap(\.clips)
     }
 
     private func placeholder(_ text: String) -> some View {

@@ -1084,8 +1084,23 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
 
     func handleShortcutKey(_ event: NSEvent) -> Bool {
         let inFullScreen = fullScreenPreview != nil && event.window === fullScreenPreview?.window
-        guard inFullScreen || event.window === window, window?.attachedSheet == nil,
-              event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
+        guard inFullScreen || event.window === window, window?.attachedSheet == nil else { return false }
+        // The card list moves clip to clip, since the list itself also stops on each day's header.
+        // Return checks or unchecks, because Space plays.
+        if event.type == .keyDown, content.importPanelHasFocus, event.modifierFlags.intersection([.command, .control, .option]).isEmpty {
+            let extending = event.modifierFlags.contains(.shift)
+            switch event.keyCode {
+            case 125, 126:
+                content.moveImportHighlight(by: event.keyCode == 125 ? 1 : -1, extending: extending)
+                return true
+            case 36 where !extending, 76 where !extending:
+                if !event.isARepeat { content.toggleImportChecks() }
+                return true
+            default:
+                break
+            }
+        }
+        guard event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
         // Typing a name must still type. SwiftUI's list focus is also a text view, but not a field editor.
         if !inFullScreen, let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor { return false }
 

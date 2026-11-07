@@ -53,6 +53,8 @@ Unit tests cover parsing, grouping, statuses, routing, and the copier. "Scripted
 - [x] Background queue with progress, pause, and cancel (scripted, progress popover not exercised)
 - [x] Personal archive routing by shooting month, created from the template (scripted on a temporary archive)
 - [x] Eject after import without blocking the app, with a spinner and sounds (scripted on a simulated card, refused while copying, accepted on a real card)
+- [x] Up and Down in the card list pass over day headers, and Return checks or unchecks the highlighted clips (scripted through the window's key handling on a stand-in Downloads folder; real keys not pressed)
+- [x] A sound when an import finishes, and another when a clip failed (scripted: done, a destination that can't be written to, and a cancelled batch; not heard)
 - [ ] Hands-on import from a real card into a real project and the real archive
 - [ ] Timed comparison with Finder on a real card with multi-GB clips
 

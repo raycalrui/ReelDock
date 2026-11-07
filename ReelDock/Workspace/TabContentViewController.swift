@@ -312,6 +312,21 @@ final class TabContentViewController: NSViewController, BrowserHost, NSSplitView
         }
     }
 
+    var importPanelHasFocus: Bool {
+        guard let importHost, let responder = view.window?.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: importHost)
+    }
+
+    func moveImportHighlight(by delta: Int, extending: Bool) {
+        let order = ImportPanelView.listedClips(app: app, model: importModel).map(\.id)
+        importModel.moveHighlight(by: delta, extending: extending, order: order)
+    }
+
+    func toggleImportChecks() {
+        let busy = Set(app.queue.jobs.filter(\.state.isActive).map(\.clip.id))
+        importModel.toggleCheckedHighlighted(excluding: busy)
+    }
+
     /// Hands the inspector back to the browser once no clip is highlighted.
     func syncSelectionFromBrowser() {
         tab.selection = activeBrowser?.currentSelection ?? []
