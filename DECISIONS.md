@@ -211,3 +211,7 @@ Rotation only needs a different display matrix in each video track's header. Pat
 ## Subtitles convert with ICU, not the Services menu
 
 The system's "Convert Text to Traditional Chinese" service declares `NSTextTransformation = Simplified-Traditional`, which is the same ICU transform `applyingTransform` offers. On 15 real subtitle pairs made by hand through the service, both produced no differences. So the app calls the transform directly, which needs no pasteboard or service process and can run off the main thread. It maps characters without context, so it shares the service's limits: `软件` stays `軟件`, not `軟體`, and `里` can stay wrong.
+
+## View geometry overrides are nonisolated
+
+The module is isolated to the main actor by default, so Swift 6 checks at run time that every Objective-C entry into it is on the main thread. AppKit doesn't keep to that: when a drag holds many items, it lays out their frames on several threads at once, and `convertRect:toView:` reads `isFlipped` on every ancestor of the table. A main-actor `isFlipped` override then stops the app. Overrides that only return a constant and that AppKit can read during layout, such as `isFlipped`, are marked `nonisolated`. `dragstart` in the debug driver starts a real drag of many rows to check this.

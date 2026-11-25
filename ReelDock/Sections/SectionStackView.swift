@@ -232,7 +232,7 @@ final class SectionPaneView: NSView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
 
     override func layout() {
         super.layout()
@@ -315,7 +315,7 @@ final class SectionStackView: NSView {
     var onExpansionChange: ((FolderSection, Bool) -> Void)?
     var onConfigurePane: ((SectionPaneView) -> Void)?
 
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
 
     var requiredHeight: CGFloat {
         let expanded = panes.indices.filter(effectiveExpanded)

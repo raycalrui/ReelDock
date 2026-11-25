@@ -294,6 +294,24 @@ final class DebugDriver {
             guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
             column.tableView.draggingEnded(DebugDragInfo(files: [], mask: "all", location: .zero))
             return "survived"
+        case "dragstart":
+            // dragstart|section title|column index|row count: selects the first rows and starts a real drag of them,
+            // which AppKit lays out on several threads at once when there's more than one.
+            guard let column = content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0] else { return "not found" }
+            let table = column.tableView
+            controller.window?.makeFirstResponder(table)
+            table.selectRowIndexes(IndexSet(integersIn: 0..<min(Int(parts[safe: 3] ?? "") ?? 1, table.numberOfRows)), byExtendingSelection: false)
+            guard let window = column.window, let first = column.selectedRows.first else { return "nothing selected" }
+            let items = column.selectedRows.compactMap { row -> NSDraggingItem? in
+                guard let writer = table.dataSource?.tableView?(table, pasteboardWriterForRow: row) else { return nil }
+                let item = NSDraggingItem(pasteboardWriter: writer)
+                item.setDraggingFrame(table.rect(ofRow: row), contents: nil)
+                return item
+            }
+            let point = table.convert(NSPoint(x: table.rect(ofRow: first).midX, y: table.rect(ofRow: first).midY), to: nil)
+            guard let event = NSEvent.mouseEvent(with: .leftMouseDragged, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return "no event" }
+            let session = table.beginDraggingSession(with: items, event: event, source: table)
+            return "survived items=\(items.count) session=\(session.draggingSequenceNumber)"
         case "springcancel":
             content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0]?.cancelSpringLoad()
         case "springheader":

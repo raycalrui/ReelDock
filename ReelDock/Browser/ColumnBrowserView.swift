@@ -23,7 +23,7 @@ protocol BrowserHost: AnyObject {
 }
 
 private final class FlippedView: NSView {
-    override var isFlipped: Bool { true }
+    nonisolated override var isFlipped: Bool { true }
 }
 
 /// Finder-style column browsing rooted at one folder.
