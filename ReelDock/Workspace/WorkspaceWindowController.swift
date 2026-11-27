@@ -30,6 +30,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     private var lastDropCheck: (sequence: Int, folder: URL, mask: NSDragOperation, operation: NSDragOperation)?
     private var keyMonitor: Any?
     private var fullScreenPreview: FullScreenPreview?
+    /// The most recent picture from Save Frame, for checking it.
+    private(set) var lastSavedFrame: URL?
     private static let defaultContentMinimumWidth: CGFloat = 420
     private static let defaultInspectorWidth: CGFloat = 440
     private static let titleInset: CGFloat = 20
@@ -375,6 +377,8 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         switch menuItem.action {
         case #selector(rotateLeft(_:)):
             return selectedVideo != nil || (tab.selection.count == 1 && Self.canEdit(tab.selection[0]) && tab.imageEdit?.canEdit != false)
+        case #selector(saveFrameAsPicture(_:)):
+            return frameSource != nil
         case #selector(cropImage(_:)):
             return tab.selection.count == 1 && Self.canEdit(tab.selection[0]) && tab.imageEdit?.canEdit != false
         case #selector(saveEdit(_:)), #selector(saveEditCopy(_:)):
@@ -1100,6 +1104,12 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
                 break
             }
         }
+        // The full-screen preview is its own window, outside this window's menu path.
+        if inFullScreen, event.type == .keyDown, event.keyCode == 1,
+           event.modifierFlags.intersection([.command, .control, .option, .shift]) == [.command, .option] {
+            if !event.isARepeat { saveFrame() }
+            return true
+        }
         guard event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty else { return false }
         // Typing a name must still type. SwiftUI's list focus is also a text view, but not a field editor.
         if !inFullScreen, let editor = window?.firstResponder as? NSTextView, editor.isFieldEditor { return false }
@@ -1330,6 +1340,45 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
         tab.trimMarks[selectedVideo.id, default: TrimMarks()].markOut(tab.playback.time)
     }
 
+    /// A video that isn't on a card, since a picture of it is written into the project or beside it.
+    var frameSource: FolderItem? {
+        guard tab.selection.count == 1, let item = tab.selection.first, !item.isFolder, item.isVideo,
+              !FileOperations.isOnCameraCard(item.url) else { return nil }
+        return item
+    }
+
+    /// Saves the frame on screen as a HEIC picture, with the LUT when the preview shows it.
+    /// Undo sends the picture to the Trash.
+    func saveFrame() {
+        guard let item = frameSource else { return }
+        let url = item.url
+        let time = tab.playback.url?.path == url.path ? tab.playback.currentFrameTime : .zero
+        let folder = FrameGrabber.destination(for: url, projectRoot: app.projectRootURL)
+        let title = "Can't save the frame"
+        Task {
+            do {
+                let grade = await PreviewLUTs.shared.grade(forClipAt: url)
+                let frameRate = await FrameGrabber.frameRate(of: url)
+                let image = try await FrameGrabber.frame(of: url, at: time, grade: grade)
+                let seconds = time.seconds.isFinite ? time.seconds : 0
+                let saved = try await Task.detached(priority: .userInitiated) {
+                    try FrameGrabber.save(image, in: folder) {
+                        FrameGrabber.frameName(for: url, seconds: seconds, frameRate: frameRate, attempt: $0)
+                    }
+                }.value
+                window?.undoManager?.registerUndo(withTarget: self) { target in
+                    target.moveToTrashNow([saved])
+                }
+                window?.undoManager?.setActionName("Save Frame")
+                FrameSound.play()
+                lastSavedFrame = saved
+                content.reloadFolderContents()
+            } catch {
+                showFileError(title, error)
+            }
+        }
+    }
+
     func clearTrimMarks() {
         guard let selectedVideo else { return }
         tab.trimMarks[selectedVideo.id] = nil
@@ -1407,6 +1456,7 @@ final class WorkspaceWindowController: NSWindowController, NSWindowDelegate, NST
     @objc func saveEdit(_ sender: Any?) { saveEdit(asCopy: false) }
     @objc func saveEditCopy(_ sender: Any?) { saveEdit(asCopy: true) }
     @objc func markIn(_ sender: Any?) { markTrimIn() }
+    @objc func saveFrameAsPicture(_ sender: Any?) { saveFrame() }
     @objc func markOut(_ sender: Any?) { markTrimOut() }
     @objc func clearMarks(_ sender: Any?) { clearTrimMarks() }
 
@@ -1574,6 +1624,22 @@ private final class WorkspaceSplitViewController: NSSplitViewController {
 }
 
 /// Finder's sound for moving to the Trash. A system sound honors the setting for user interface sound effects.
+/// The system's screenshot sound, since the picture usually lands in a section out of view.
+private enum FrameSound {
+    private static let sound: SystemSoundID? = {
+        let file = URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/system/Screen Capture.aif")
+        var sound: SystemSoundID = 0
+        return AudioServicesCreateSystemSoundID(file as CFURL, &sound) == noErr ? sound : nil
+    }()
+
+    static func play() {
+        if let sound { AudioServicesPlaySystemSound(sound) }
+        #if DEBUG
+        debugPlayedSounds.append("frame=\(sound != nil)")
+        #endif
+    }
+}
+
 private enum TrashSound {
     private static let sound: SystemSoundID? = {
         let file = URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/finder/move to trash.aif")

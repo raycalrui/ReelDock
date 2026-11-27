@@ -44,6 +44,7 @@ Finder 在两件事上很慢：
 - Read and write real Finder tags, so they stay in sync with Finder.<br>读写真正的 Finder 标签，和 Finder 保持同步。
 - Create a project from the template folder, named `YYYYMMDD_name`.<br>用模板文件夹新建项目，命名为 `YYYYMMDD_name`。
 - Trim MP4 and MOV clips with in and out points, and rotate them instantly, without re-encoding.<br>用入点和出点剪辑 MP4 和 MOV 片段，也能即时旋转，都不用重新编码。
+- Save the frame on screen as a full-size HEIC picture in the project's picture folder, with the preview's LUT when it shows one.<br>把当前画面存成全尺寸 HEIC 图片，放进项目的 picture 文件夹；预览开着 LUT 时，图片也会套上 LUT。
 - Rotate and crop JPEG, PNG, HEIC, and TIFF images. Saving keeps the original in the Trash, or writes a copy beside it.<br>旋转和裁剪 JPEG、PNG、HEIC、TIFF 图片。保存时原文件进废纸篓，也可以在旁边另存一份。
 - Create a Traditional Chinese version of an SRT subtitle from its context menu.<br>在 SRT 字幕的右键菜单里一键创建繁体中文版本。
 - Sort any section by name, shooting date, size, or kind, and show it as a list or a grid of pictures. Each choice is remembered by section name.<br>每个分区都能按名称、拍摄日期、大小或类型排序，也能在列表和图片网格之间切换，选择按分区名记住。

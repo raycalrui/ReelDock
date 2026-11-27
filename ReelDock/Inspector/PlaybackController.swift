@@ -67,6 +67,14 @@ final class PlaybackController {
     var isPlaying: Bool { rate != 0 }
     var canPlay: Bool { url != nil }
 
+    /// The frame on screen, to the exact frame when the player has it, for saving a picture of it.
+    var currentFrameTime: CMTime {
+        if reverse == nil, !isHandingOff, let item = player.currentItem, item.status == .readyToPlay {
+            return player.currentTime()
+        }
+        return CMTime(seconds: time, preferredTimescale: 600)
+    }
+
     init() {
         player.actionAtItemEnd = .pause
     }

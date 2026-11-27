@@ -420,3 +420,62 @@ private let blackmagicInfo = Data("""
         #expect(writer.status == .completed)
     }
 }
+
+@Suite struct FrameGrabberTests {
+    @Test func namesFramesByTimecodeWithoutColons() {
+        let video = URL(fileURLWithPath: "/x/C0012.MP4")
+        #expect(FrameGrabber.frameName(for: video, seconds: 83.5, frameRate: 24, attempt: 0) == "C0012 01-23-12.heic")
+        #expect(FrameGrabber.frameName(for: video, seconds: 83.5, frameRate: 24, attempt: 1) == "C0012 01-23-12 2.heic")
+        #expect(FrameGrabber.frameName(for: video, seconds: 3725, frameRate: 25, attempt: 0) == "C0012 1-02-05-00.heic")
+    }
+
+    @Test func savesIntoTheProjectsPictureSection() throws {
+        let fixture = try FeatureFixture()
+        defer { fixture.remove() }
+        let video = try fixture.write("projects/20261127_a/3 video/day1/C0001.MP4")
+        try fixture.write("projects/20261127_a/5 picture/keep.jpg")
+        try fixture.write("projects/20261127_a/1 audio/a.wav")
+        let picture = fixture.url("projects/20261127_a/5 picture")
+        #expect(FrameGrabber.destination(for: video, projectRoot: fixture.url("projects")).standardizedFileURL == picture.standardizedFileURL)
+        #expect(FrameGrabber.project(containing: video, projectRoot: fixture.url("projects"))?.lastPathComponent == "20261127_a")
+    }
+
+    @Test func savesBesideTheVideoWithoutAPictureSection() throws {
+        let fixture = try FeatureFixture()
+        defer { fixture.remove() }
+        let inProject = try fixture.write("projects/20261127_b/3 video/C0001.MP4")
+        let outside = try fixture.write("elsewhere/C0002.MP4")
+        let root = fixture.url("projects")
+        #expect(FrameGrabber.destination(for: inProject, projectRoot: root).standardizedFileURL == inProject.deletingLastPathComponent().standardizedFileURL)
+        #expect(FrameGrabber.destination(for: outside, projectRoot: root).standardizedFileURL == outside.deletingLastPathComponent().standardizedFileURL)
+        #expect(FrameGrabber.destination(for: outside, projectRoot: nil).standardizedFileURL == outside.deletingLastPathComponent().standardizedFileURL)
+    }
+
+    @Test func acceptsEitherSpellingOfThePictureSection() {
+        #expect(FrameGrabber.sectionKey(of: "5 picture") == "picture")
+        #expect(FrameGrabber.sectionKey(of: "5picture") == "picture")
+        #expect(FrameGrabber.sectionKey(of: "Pictures") == "pictures")
+        #expect(!FrameGrabber.pictureKeys.contains(FrameGrabber.sectionKey(of: "4 cover")))
+    }
+
+    @Test func writesAVerifiedHEICWithoutReplacingAnything() throws {
+        let fixture = try FeatureFixture()
+        defer { fixture.remove() }
+        let folder = fixture.url("out")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let context = try #require(CGContext(data: nil, width: 64, height: 36, bitsPerComponent: 8, bytesPerRow: 0,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        context.setFillColor(CGColor(red: 1, green: 0.5, blue: 0, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 64, height: 36))
+        let image = try #require(context.makeImage())
+        let name: (Int) -> String = { $0 == 0 ? "f.heic" : "f \($0 + 1).heic" }
+        let first = try FrameGrabber.save(image, in: folder, name: name)
+        let second = try FrameGrabber.save(image, in: folder, name: name)
+        #expect(first.lastPathComponent == "f.heic")
+        #expect(second.lastPathComponent == "f 2.heic")
+        let source = try #require(CGImageSourceCreateWithURL(first as CFURL, nil))
+        #expect(CGImageSourceGetType(source) as String? == UTType.heic.identifier)
+        let names = try FileManager.default.contentsOfDirectory(atPath: folder.path)
+        #expect(names.sorted() == ["f 2.heic", "f.heic"])
+    }
+}

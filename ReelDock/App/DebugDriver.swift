@@ -312,6 +312,16 @@ final class DebugDriver {
             guard let event = NSEvent.mouseEvent(with: .leftMouseDragged, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) else { return "no event" }
             let session = table.beginDraggingSession(with: items, event: event, source: table)
             return "survived items=\(items.count) session=\(session.draggingSequenceNumber)"
+        case "saveframe":
+            // saveframe: Save Frame as Picture for the selection, at the playhead.
+            guard controller.frameSource != nil else { return "no video" }
+            controller.saveFrame()
+        case "lastframe":
+            // lastframe: where the last saved frame went, its size, color space, and the playhead.
+            guard let url = controller.lastSavedFrame, let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] else { return "none" }
+            let profile = properties[kCGImagePropertyProfileName] as? String ?? "-"
+            return "path=\(url.path) type=\(CGImageSourceGetType(source).map { $0 as String } ?? "-") size=\(properties[kCGImagePropertyPixelWidth] ?? "-")x\(properties[kCGImagePropertyPixelHeight] ?? "-") profile=\(profile) time=\(controller.tab.playback.currentFrameTime.seconds)"
         case "springcancel":
             content.debugBrowser(parts[1])?.columns[safe: Int(parts[2]) ?? 0]?.cancelSpringLoad()
         case "springheader":
@@ -991,7 +1001,7 @@ final class DebugDriver {
             guard let item = menu.items.first(where: { $0.title == title }), let action = item.action else { return "no such item" }
             return "performed=\(NSApp.sendAction(action, to: item.target, from: item))"
         case "menu":
-            // menu|new, rename, or trash: goes through validation, as the menu does.
+            // menu|new, rename, trash, rotate, or frame: goes through validation, as the menu does.
             let actions: [String: Selector] = [
                 "new": #selector(WorkspaceWindowController.newFolder(_:)),
                 "rename": #selector(WorkspaceWindowController.renameSelection(_:)),
@@ -1000,6 +1010,8 @@ final class DebugDriver {
                 "paste": #selector(WorkspaceWindowController.paste(_:)),
                 "movehere": #selector(WorkspaceWindowController.moveItemsHere(_:)),
                 "trash": #selector(WorkspaceWindowController.moveSelectionToTrash(_:)),
+                "rotate": #selector(WorkspaceWindowController.rotateLeft(_:)),
+                "frame": #selector(WorkspaceWindowController.saveFrameAsPicture(_:)),
             ]
             guard let action = actions[parts[1]] else { return "unknown" }
             let item = NSMenuItem(title: "", action: action, keyEquivalent: "")

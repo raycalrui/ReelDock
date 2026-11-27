@@ -31,6 +31,9 @@ struct VideoEditBar: View {
                 Button { controller?.rotateVideo(clockwise: false) } label: { Image(systemName: "rotate.left") }
                     .buttonStyle(.borderless)
                     .help("Rotate Left (⌘L). Takes effect at once, without re-encoding.")
+                Button { controller?.saveFrame() } label: { Image(systemName: "camera") }
+                    .buttonStyle(.borderless)
+                    .help("Save this frame as a picture in the project's picture folder (⌥⌘S)")
                 Spacer().frame(width: 6)
                 Button("I") { controller?.markTrimIn() }
                     .help("Mark In at the current frame (I)")

@@ -121,6 +121,8 @@ enum MainMenu {
             .separator(),
             item("Save", #selector(WorkspaceWindowController.saveEdit(_:)), "s"),
             item("Save Copy", #selector(WorkspaceWindowController.saveEditCopy(_:)), "s", [.command, .shift]),
+            .separator(),
+            item("Save Frame as Picture", #selector(WorkspaceWindowController.saveFrameAsPicture(_:)), "s", [.command, .option]),
         ]
     }
 
